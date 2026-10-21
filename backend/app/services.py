@@ -1,0 +1,139 @@
+from datetime import date
+from decimal import Decimal
+from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
+from email.message import EmailMessage
+from io import BytesIO
+import smtplib
+from sqlalchemy import select, func
+from .models import Invoice, Payment, Resident, User, Outbox, now
+from .config import settings
+from .db import SessionLocal
+from . import whatsapp
+
+def invoice_pdf(invoice,resident,branch,paid,balance):
+    lines=[
+        "CITYHIVE LUXURY PG'S AND CO-SPACE",
+        f'Invoice: {invoice.invoice_number}',
+        f'Issued: {invoice.issued_on}    Due: {invoice.due_on}',
+        f'Branch: {branch.name}',
+        f'Address: {branch.address or "Not configured"}',
+        f'Resident: {resident.name}    Resident ID: {resident.id}',
+        f'Room: {invoice.room_number}    Billing period: {invoice.month:%B %Y}',
+        '',
+        'Description                                      Amount (INR)',
+        f'Monthly accommodation fee                      {invoice.base_fee:>12.2f}',
+        *(([f'{invoice.additional_charge_label or "Additional configured charge"}   {invoice.additional_charge_amount:>12.2f}']) if invoice.additional_charge_amount else []),
+        f'Discount                                         {-invoice.discount:>12.2f}',
+        '-'*63,
+        f'Total due                                       {invoice.amount:>12.2f}',
+        f'Paid                                            {paid:>12.2f}',
+        f'Balance                                         {balance:>12.2f}',
+        '',
+        'This bill records configured accommodation charges and payments.',
+        'No tax or statutory registration claim is made by this document.',
+    ]
+    y=790;commands=['BT','/F1 11 Tf']
+    for idx,line in enumerate(lines):
+        if idx==0: commands.extend(['/F1 17 Tf',f'50 {y} Td',f'({pdf_escape(line)}) Tj','/F1 11 Tf'])
+        else: commands.extend(['0 -24 Td',f'({pdf_escape(line)}) Tj'])
+        y-=24
+    commands.append('ET')
+    stream='\n'.join(commands).encode('ascii')
+    objects=[
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream',
+    ]
+    output=BytesIO();output.write(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');offsets=[0]
+    for i,obj in enumerate(objects,1):
+        offsets.append(output.tell());output.write(f'{i} 0 obj\n'.encode());output.write(obj);output.write(b'\nendobj\n')
+    xref=output.tell();output.write(f'xref\n0 {len(objects)+1}\n'.encode());output.write(b'0000000000 65535 f \n')
+    for off in offsets[1:]: output.write(f'{off:010d} 00000 n \n'.encode())
+    output.write(f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+    return output.getvalue()
+
+def pdf_escape(value):
+    ascii_value=str(value).encode('ascii','replace').decode('ascii')
+    return ascii_value.replace('\\','\\\\').replace('(','\\(').replace(')','\\)')
+
+def local_today(): return datetime.now(ZoneInfo('Asia/Kolkata')).date()
+def paid_total(db, invoice_id):
+    return db.scalar(select(func.coalesce(func.sum(Payment.amount),0)).where(Payment.invoice_id==invoice_id,Payment.reversed_at.is_(None))) or Decimal('0')
+def receipt_text(db, payment):
+    invoice = db.get(Invoice,payment.invoice_id)
+    resident = db.get(Resident,invoice.resident_id)
+    return (f"CITYHIVE LUXURY PG'S AND CO-SPACE - PAYMENT RECEIPT\nReceipt: SW-{payment.id:06d}\nResident: {resident.name}\n"
+            f'Room: {invoice.room_number}\nFee month: {invoice.month:%B %Y}\n'
+            f'Monthly fee: INR {invoice.base_fee:.2f}\nDiscount: INR {invoice.discount:.2f}\n'
+            +(f'{invoice.additional_charge_label or "Additional configured charge"}: INR {invoice.additional_charge_amount:.2f}\n' if invoice.additional_charge_amount else '')+
+            f'Invoice total: INR {invoice.amount:.2f}\n'
+            f'Payment: INR {payment.amount:.2f}\n'
+            f'Method: {payment.method}\nReference: {payment.reference or "—"}\n'
+            f'Payer: {payment.payer_name or "Not specified"}\n'
+            f'Recorded at (UTC): {payment.paid_at.isoformat()}\n'
+            f'Balance after this payment: INR {invoice.amount-db.scalar(select(func.coalesce(func.sum(Payment.amount),0)).where(Payment.invoice_id==invoice.id,((Payment.reversed_at.is_(None))|(Payment.id==payment.id)),((Payment.paid_at<payment.paid_at)|((Payment.paid_at==payment.paid_at)&(Payment.id<=payment.id))))) :.2f}\n'
+            +(f'PAYMENT REVERSED: {payment.reversal_reason}\n' if payment.reversed_at else '')+
+            'This receipt records a payment confirmed by hostel management.\n')
+
+def queue_reminders(db, branch_ids=None):
+    today = local_today()
+    count = 0
+    # Once per invoice per local calendar day. Future dues are not reminded.
+    query=select(Invoice).where(Invoice.due_on<=today).with_for_update()
+    if branch_ids is not None: query=query.where(Invoice.branch_id.in_(branch_ids))
+    for invoice in db.scalars(query):
+        balance = invoice.amount-paid_total(db,invoice.id)
+        key = f'reminder:{invoice.id}:{today.isoformat()}'
+        if balance<=0 or db.scalar(select(Outbox.id).where(Outbox.dedupe_key==key)): continue
+        resident = db.get(Resident,invoice.resident_id)
+        user = db.get(User,resident.user_id)
+        body=f'Hi {resident.name},\nYour outstanding fee is INR {balance:.2f} for {invoice.month:%B %Y}. Due date: {invoice.due_on}. Please contact management to pay.\n'
+        db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=key,recipient=user.email,subject=f'Cityhive fee reminder · {invoice.month:%B %Y}',body=body,channel='email'))
+        if resident.whatsapp_notifications and resident.whatsapp_consent_at and resident.phone and whatsapp.configured():
+            db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=f'{key}:whatsapp',recipient=resident.phone,
+                subject=f'Cityhive fee reminder · {invoice.month:%B %Y}',body=body,channel='whatsapp'))
+        db.flush()
+        count += 1
+    return count
+
+def deliver_emails():
+    # SMTP delivery is at-least-once: crash after SMTP acceptance can duplicate an email.
+    with SessionLocal() as db:
+        pending = db.scalars(select(Outbox).where(Outbox.sent_at.is_(None),Outbox.cancelled.is_(False),Outbox.attempts<5,
+            (Outbox.next_attempt_at.is_(None)) | (Outbox.next_attempt_at<=now())).order_by(Outbox.id).limit(50).with_for_update(skip_locked=True)).all()
+        for item in pending:
+            if item.dedupe_key.startswith('reminder:'):
+                invoice = db.get(Invoice,int(item.dedupe_key.split(':')[1]))
+                balance = invoice.amount-paid_total(db,invoice.id)
+                if balance<=0:
+                    item.cancelled = True
+                    item.last_error = ''
+                    continue
+                resident = db.get(Resident,invoice.resident_id)
+                item.body = (f'Hi {resident.name},\nYour outstanding fee is INR {balance:.2f} '
+                             f'for {invoice.month:%B %Y}. Due date: {invoice.due_on}. '
+                             'Please contact management to pay.\n')
+            item.attempts += 1
+            try:
+                if item.channel=='whatsapp':
+                    invoice=db.get(Invoice,int(item.dedupe_key.split(':')[1]))
+                    resident=db.get(Resident,invoice.resident_id)
+                    item.provider_message_id=whatsapp.send_reminder(item.recipient,invoice.invoice_number,invoice.month.strftime('%B %Y'),f'{balance:.2f}',invoice.due_on.isoformat())
+                else:
+                    msg = EmailMessage()
+                    msg['From'],msg['To'],msg['Subject'] = settings.mail_from,item.recipient,item.subject
+                    msg['Message-ID'] = f'<cityhive-{item.id}@cityhive.local>'
+                    msg.set_content(item.body)
+                    with smtplib.SMTP(settings.smtp_host,settings.smtp_port,timeout=5) as smtp: smtp.send_message(msg)
+                item.sent_at = now()
+                item.delivery_status='submitted'
+                item.last_error = ''
+            except Exception as exc:
+                item.last_error = 'SMTP delivery failed; automatic retry pending'
+                item.delivery_status='retrying' if item.attempts<5 else 'failed'
+                item.next_attempt_at=now()+timedelta(minutes=min(60,2**item.attempts))
+                if item.channel=='whatsapp': item.last_error='WhatsApp delivery unavailable or failed; check provider configuration'
+        db.commit()
