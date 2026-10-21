@@ -1,5 +1,7 @@
 # Cityhive Luxury PG's and Co-space
 
+> Historical snapshot. For the subsequent integration, migration and release checks, see [the current release audit](RELEASE_AUDIT_2026-10-21.md) and [VALIDATION.md](../VALIDATION.md). Earlier limitations and counts below describe their stated audit point.
+
 ## Project audit and client handover
 
 **Review date:** 21 October 2026

@@ -3,6 +3,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
+from sqlalchemy import inspect
 
 ROOT=Path(__file__).resolve().parents[1]
 def legacy_database(path,branches=0):
@@ -36,7 +37,7 @@ def test_populated_legacy_schema_is_backfilled_and_upgrade_is_idempotent(tmp_pat
         room=c.execute(text('SELECT branch_id FROM rooms WHERE id=1')).scalar_one()
         resident=c.execute(text('SELECT branch_id FROM residents WHERE id=1')).scalar_one()
         assert room==resident
-        assert c.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='0013_fees_settlements_complaint_assignment'
+        assert c.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='0014_release_completion'
         assert c.execute(text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='admissions'")).scalar_one()==1
         assert c.execute(text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='complaint_events'")).scalar_one()==1
         assert c.execute(text('SELECT resident_code FROM residents WHERE id=1')).scalar_one().startswith('CH-')
@@ -53,3 +54,24 @@ def test_legacy_rows_are_not_assigned_arbitrarily_when_multiple_branches_exist(t
     path=tmp_path/'ambiguous.sqlite';legacy_database(path,branches=2)
     with pytest.raises(RuntimeError,match='multiple branches exist'):
         command.upgrade(config_for(path),'head')
+
+def test_release_upgrade_preserves_all_existing_columns_and_rows(tmp_path):
+    path=tmp_path/'pre-release.sqlite';legacy_database(path)
+    cfg=config_for(path);command.upgrade(cfg,'0013_fees_settlements_complaint_assignment')
+    engine=create_engine(f'sqlite:///{path}')
+    with engine.begin() as c:
+        c.execute(text("INSERT INTO payments (id,invoice_id,amount,method,reference,idempotency_key,recorded_by,paid_at) VALUES (1,1,2000,'cash','original-reference','original-payment-key',1,'2026-01-10 10:00:00')"))
+        c.execute(text("INSERT INTO outbox (id,branch_id,dedupe_key,recipient,subject,body,channel,delivery_status) VALUES (1,1,'original-receipt','r@example.test','Receipt','Preserved content','email','queued')"))
+        tables=[t for t in inspect(c).get_table_names() if t!='alembic_version']
+        columns={t:[col['name'] for col in inspect(c).get_columns(t)] for t in tables}
+        snapshot={t:c.execute(text(f'SELECT * FROM "{t}"')).all() for t in tables}
+    command.upgrade(cfg,'head');command.upgrade(cfg,'head')
+    with engine.connect() as c:
+        for table in tables:
+            fields=','.join(f'"{col}"' for col in columns[table])
+            assert c.execute(text(f'SELECT {fields} FROM "{table}"')).all()==snapshot[table],table
+        assert c.execute(text('SELECT user_id FROM outbox WHERE id=1')).scalar_one()==1
+        assert c.execute(text('SELECT discount_percent,discount_rule_id FROM invoices WHERE id=1')).one()==(0,None)
+        assert c.exec_driver_sql('PRAGMA integrity_check').scalar()=='ok'
+        assert c.exec_driver_sql('PRAGMA foreign_key_check').all()==[]
+    engine.dispose()

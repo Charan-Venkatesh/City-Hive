@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
+from urllib.parse import urlsplit
 Money = Decimal
 class Login(BaseModel):
     email: str = Field(max_length=254)
@@ -79,6 +80,7 @@ class Allocation(BaseModel):
 class IDReview(BaseModel):
     status: Literal['reviewed','rejected']
     note: str = Field(default='',max_length=1000)
+    aadhaar_last4: str | None = Field(default=None,pattern=r'^\d{4}$')
 class BillingRun(BaseModel):
     month: date
 class PaymentCreate(BaseModel):
@@ -106,10 +108,20 @@ class BranchCreate(BaseModel):
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')
     address: str = Field(default='',max_length=300)
     contact_phone: str = Field(default='',max_length=30)
+    contact_email: EmailStr | Literal[''] = ''
+    image_url: str = Field(default='',max_length=1000)
     description: str = Field(default='',max_length=2000)
     facilities: str = Field(default='',max_length=2000)
     rules: str = Field(default='',max_length=3000)
     notice_days: int | None = Field(default=None,ge=0,le=365)
+    @field_validator('image_url')
+    @classmethod
+    def validate_image(cls,value):
+        if not value: return value
+        url=urlsplit(value)
+        if url.scheme!='https' or not url.netloc or url.username or url.password or url.fragment:
+            raise ValueError('Use a public HTTPS URL for an approved property image')
+        return value
 class BranchUpdate(BranchCreate):
     active: bool = True
 class BranchAdminCreate(BaseModel):
@@ -166,3 +178,18 @@ class SettlementRefund(BaseModel):
     method: Literal['cash','upi','bank']
     reference: str = Field(default='',max_length=100)
     idempotency_key: str = Field(min_length=10,max_length=64)
+
+class DiscountCreate(BaseModel):
+    percentage: Decimal = Field(gt=0,le=100,decimal_places=2)
+    charge_scope: Literal['accommodation','all_monthly']
+    max_amount: Money | None = Field(default=None,ge=0,le=1000000,decimal_places=2)
+    effective_from: date
+    effective_until: date
+    reason: str = Field(min_length=5,max_length=500,pattern=r'\S')
+    @model_validator(mode='after')
+    def dates(self):
+        if self.effective_until<self.effective_from:
+            raise ValueError('Discount end date must follow its start date')
+        if self.effective_from.day!=1 or self.effective_until.day!=1:
+            raise ValueError('Discount dates identify billing months; use the first day of the month')
+        return self

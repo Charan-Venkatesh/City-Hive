@@ -1,5 +1,7 @@
 # Recovery report — 2026-10-21
 
+> Historical snapshot. For the subsequent integration, migration and release checks, see [the current release audit](RELEASE_AUDIT_2026-10-21.md) and [VALIDATION.md](../VALIDATION.md). Earlier limitations and counts below describe their stated audit point.
+
 ## Scope and preservation
 
 - Project root inspected: `project workspace`.

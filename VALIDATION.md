@@ -1,5 +1,57 @@
 # Validation — chronological audit record (latest update 2026-10-21)
 
+## Latest validation — integration/release work, 2026-10-21
+
+This section supersedes older snapshots below for the current working tree. **The product is not yet production-ready or client-accepted.** See [the release audit](docs/RELEASE_AUDIT_2026-10-21.md), [deployment/recovery guide](docs/DEPLOYMENT.md), [all API routes](docs/API_ROUTE_INVENTORY.md), and [unexecuted browser checklist](docs/visual-qa/ACCEPTANCE.md).
+
+### Actual checks and results
+
+| Check | Command / method actually used | Result |
+|---|---|---|
+| Baseline backend | `TEST_DATABASE_URL=sqlite:// .venv/bin/python -m pytest -q`, from `backend` before changes | 26 passed, one upstream warning |
+| Baseline frontend | Bundled Node running `node_modules/vite/bin/vite.js build` from `frontend` | Passed; original assets matched observed live assets |
+| Final backend suite | `TEST_DATABASE_URL=sqlite:// .venv/bin/python -m pytest -q` from `backend` | **40 passed**, one upstream Starlette/AnyIO BlockingPortal deprecation warning; 7.15 seconds in the final run |
+| Python compilation | `.venv/bin/python -m compileall -q app migrations scripts tests` from `backend` | Passed |
+| Frontend API checks | `node --test tests/*.test.js` from `frontend` | **6 passed** |
+| Final frontend production build | Same bundled Node running `node_modules/vite/bin/vite.js build` from `frontend` | Passed, Vite 6.4.1, 1,583 modules; JS `index-DaXHxuyZ.js`, CSS `index-DRAg6XJB.css` |
+| Invalid production API guard | Build with `VITE_API_BASE_URL=http://127.0.0.1:8000/api` | Expected exit 1: `Production API requests require a public HTTPS backend.` Normal build then passed |
+| Migration regression | Three migration tests, included in the 40-test suite | SQLite legacy/populated upgrade, replay, ambiguity rejection, all previous column/value preservation and old SW IDs passed |
+| Real process startup/restart | `tests/test_runtime.py`, included in suite; separate temporary SQLite file and dynamically selected port | HTTP JSON health/build/branches; migration to head; user identity/hash and test record persist after process restart |
+| Local API + frontend integration | HTTP GET through both `127.0.0.1:8000` and Vite `127.0.0.1:5173` | `/api/health`, `/api/build`, `/api/branches` return 200 JSON; public branches `[]` accurately reflects unpublished local data |
+| Live Slate integration | Read-only HTTP GET, evidence in `docs/live-http-evidence.json` | **Still broken**: `/`, `/api/health`, `/api/build`, `/api/branches` all return identical 870-byte homepage HTML, SHA `7227c0a1c3ac420dd62ad44e235a7fc3bfcd35bebe70dcfab2a5cb5a5c64ebc9` |
+| Docker | `docker compose version`; `docker compose up --build -d` | Both exit 127: `zsh:1: command not found: docker` |
+| PostgreSQL availability | `command -v psql`, `command -v pg_isready`, listener inspection on 5432 | No tools on PATH and no local listener found. No PostgreSQL runtime, locks, migration, durability or Docker result claimed |
+| Browser QA | Supported browser creation attempted | Tool returned `Local browser use is disabled in Work settings`. No alternate browser automation, screenshots or console results claimed |
+| Source checks | `git diff HEAD --check`, scoped legacy/QR/fetch searches, applied migration byte comparison to Git HEAD | Passed; shared frontend `fetch` only; old revision files unchanged; retained legacy identifiers classified below/in audit |
+
+### New coverage and resolved failures
+
+The original 26 checks remain. Added coverage includes: receipt-PDF and notification privacy; branch-admin denial; identity suffix entry after enrollment; optional percentage approval validation/cap/scope/non-overlap/no fixed stacking/revocation/snapshot preservation; upcoming reminders and consent recheck; SMTP TLS/login ordering; signed webhook verification, replay and status ordering; persistent throttles; scheduler authorization and persistent success/failure state; as-of payment cutoff and IST settlement/day/week/month totals; publication edits and safe configured photo URLs; production settings and CORS; mocked Cloud API authentication body/button and safe provider errors; populated release migration preservation; real HTTP startup/restart.
+
+Frontend checks cover API-origin validation, actual resource path mappings, HTML fallback rejection, validation-error redaction, PDF request routing and network-failure messages. They do not execute React user journeys.
+
+An early regression run found an over-strict publication edit rule that rejected ordinary notice-period edits to an already-incomplete legacy branch. It was repaired to reject newly introduced publication problems while permitting unrelated repairs. A migration test still expecting the old head was updated to the new head, with stronger preservation assertions added. A new branch-admin test initially omitted verified-MFA claims in its synthetic test token; its fixture was corrected, retaining the application's authentication requirement. No failing authorization assertion was removed or weakened. The original reminder expectation now follows the configured upcoming window, and obsolete in-memory throttle fixture resets were removed after moving limits into the disposable database.
+
+### Preservation and local migration
+
+- Before implementation: original local SQLite at revision `0013_fees_settlements_complaint_assignment`; integrity `ok`; zero foreign-key violations; one user and one unpublished branch; all other business tables empty.
+- Initial recovery: a private directory outside the repository containing a verified Git bundle, SQLite backup, protected env copies and manifest.
+- Fresh pre-0014 backup: a private SQLite backup outside the repository; SHA-256 `e39084e1705494398f1159792ebf48337553bf295f54846db158125381c9adfe`.
+- Stopped the confirmed local API process; verified the source still matched the backup; applied `0014_release_completion` to the same `backend/staywell.db`; compared all previous columns and values in all 25 business tables.
+- After migration: 29 tables; existing counts unchanged; all three new tables empty; integrity `ok`; zero foreign-key violations. Original root/backend env files are byte-for-byte unchanged; historical applied revisions are byte-for-byte unchanged.
+- Restarted the API against the same database. No QA data was copied into it. The absent published branches and unconfigured WhatsApp provider remain deliberate configuration gaps, not bypassed by test records or authentication changes.
+- No production database, service configuration or remote Git branch was changed. No live production backup/restore or PostgreSQL migration is claimed. Local data/build hashes are in `docs/local-release-evidence.json`.
+
+### Remaining blockers and intentional identifiers
+
+The deployed backend URL/project and production database identity/access remain unknown; the owner reported they exist but could not identify the endpoint. Slate still points API traffic at its static site. Browser access is disabled. Docker/PostgreSQL and real WhatsApp/SMTP/scheduler delivery are unavailable for verification. Actual branch inventory, verified contact details and genuine property photographs must be supplied by management; one existing illustrative image remains clearly labeled. Large-volume load testing, PDF visual/multilingual acceptance, and production operational/security review remain outstanding. The lightweight PDF renderer replaces unsupported non-ASCII characters; use a licensed Unicode-capable renderer/font before issuing multilingual documents. The sender's SMTP acceptance/crash boundary remains at least once, not exactly once.
+
+`staywell-token` remains a private session key; `staywell.db` remains the existing local filename; `SW` remains invoice/receipt numbering and filenames, including historical records. `pass_code` remains a required internal unique gate-pass column but is not exposed or validated. The old `gate_pass_validation_events` table remains dormant from immutable revision 0013. QR mentions are scope/history and negative endpoint tests only. There is no QR generator/scanner/API/control/dependency. Existing `cityhive.local` mail examples/Message-ID infrastructure are not public contact claims. No customer-facing Staywell business label was found in current application source.
+
+## Historical validation snapshots
+
+The sections below record earlier states and limitations at their stated dates. Statements that a feature was absent, counts were lower, migrations were older, or a throttle was in memory are historical, not the current release result.
+
 The sections below preserve dated verification snapshots. The latest implementation and environment status are recorded at the end of this file; older “remaining work” statements describe their original audit dates.
 
 Cityhive rebrand verification was performed on 2026-10-20. Customer-facing browser title, metadata, public/header/login/workspace wordmarks, receipt and invoice output, email subjects, and default sender are branded Cityhive. The provided Google business reference link could not be opened in the available browser tool, so no business details were inferred from it.

@@ -3,14 +3,14 @@ os.environ.setdefault('JWT_SECRET','test-secret-at-least-thirty-two-characters-l
 os.environ.setdefault('ADMIN_PASSWORD','TestOwner123!')
 os.environ['JOBS_ENABLED']='false'
 import pytest
-from datetime import timedelta
+from datetime import date, timedelta
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from app.main import app, login_attempts, otp_ip_attempts
+from app.main import app
 from app.db import Base, get_db
 from app.models import User, Branch, BranchAdmin, Resident, Outbox, OtpChallenge, AuthAuditEvent, NotificationPreferenceEvent, PaymentAuditEvent, now
 from app.security import hashing, token_for
@@ -19,8 +19,6 @@ from app.whatsapp import test_deliveries as read_test_deliveries, clear_test_del
 from app.services import local_today
 @pytest.fixture()
 def ctx(monkeypatch):
-    login_attempts.clear()
-    otp_ip_attempts.clear()
     clear_test_deliveries()
     monkeypatch.setattr(settings,'whatsapp_enabled',True)
     monkeypatch.setattr(settings,'whatsapp_provider','test')
@@ -108,7 +106,7 @@ def test_invoices_partial_payments_and_receipts(ctx):
         outbox=db.scalars(select(Outbox)).all()
         assert len(outbox)==1 and outbox[0].sent_at is None
     reminders=c.post('/api/reminders/run',headers=h).json()
-    assert reminders['queued']==(1 if local_today().day>=5 else 0)
+    assert reminders['queued']==int(date.fromisoformat(i['due_on'])<=local_today()+timedelta(days=settings.upcoming_reminder_days))
     assert c.post('/api/reminders/run',headers=h).json()['queued']==0
     assert c.post('/api/payments',headers=h,json={**p,'amount':'5000','idempotency_key':'unique-payment-key-2'}).status_code==201
     assert c.get('/api/invoices',headers=h).json()[0]['status']=='paid'

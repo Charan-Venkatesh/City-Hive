@@ -11,7 +11,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import Session
 
 from .models import Invoice, Payment, Resident, Room, User, Branch
@@ -60,7 +60,10 @@ def financial_report(db: Session, user: User, start: date, end: date,
     invoice_ids = [invoice.id for invoice, _ in rows]
     payments_by_invoice: dict[int, list[Payment]] = defaultdict(list)
     if invoice_ids:
-        for payment in db.scalars(select(Payment).where(Payment.invoice_id.in_(invoice_ids),Payment.reversed_at.is_(None))
+        payment_conditions=(Payment.invoice_id.in_(invoice_ids),Payment.paid_at<datetime_end(as_of),or_(Payment.reversed_at.is_(None),Payment.reversed_at>=datetime_end(as_of)))
+        if (db.scalar(select(func.count(Payment.id)).where(*payment_conditions)) or 0)>MAX_REPORT_PAYMENTS:
+            raise HTTPException(422,'Report has too many invoice payments; narrow the date or branch filters')
+        for payment in db.scalars(select(Payment).where(*payment_conditions)
                                   .order_by(Payment.paid_at, Payment.id)):
             payments_by_invoice[payment.invoice_id].append(payment)
 
@@ -80,6 +83,8 @@ def financial_report(db: Session, user: User, start: date, end: date,
     on_time = 0
     recent_by_method: dict[str, Decimal] = defaultdict(lambda: ZERO)
     trend: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    daily: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    weekly: dict[str, Decimal] = defaultdict(lambda: ZERO)
     cash_by_staff: dict[int, Decimal] = defaultdict(lambda: ZERO)
     invoice_rows = []
 
@@ -93,7 +98,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
         for payment in all_payments:
             cumulative += Decimal(payment.amount)
             if settlement_date is None and cumulative >= Decimal(invoice.amount):
-                settlement_date = payment.paid_at.date()
+                settlement_date = (payment.paid_at.replace(tzinfo=timezone.utc) if payment.paid_at.tzinfo is None else payment.paid_at).astimezone(BUSINESS_TZ).date()
 
         report_branch_id=invoice.branch_id
         inv = invoice_rows_for(db, residents, rooms, branches, invoice, resident,report_branch_id)
@@ -132,6 +137,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
             if invoice.due_on < as_of:
                 residents[resident.id]["overdue"] += balance
                 residents[resident.id]["overdue_invoice_count"] += 1
+                rooms[(report_branch_id,invoice.room_number)]["overdue_invoice_count"]=rooms[(report_branch_id,invoice.room_number)].get("overdue_invoice_count",0)+1
                 residents[resident.id]["current_days_past_due"] = max(
                     residents[resident.id]["current_days_past_due"], (as_of - invoice.due_on).days)
         residents[resident.id]["billed"] += Decimal(invoice.amount)
@@ -158,7 +164,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
             rooms[(report_branch_id, invoice.room_number)]["on_time_count"] += int(settlement_date <= invoice.due_on)
         if balance > 0 and invoice.due_on < as_of:
             invoice_rows.append({"invoice_id": invoice.id, "invoice_number": invoice.invoice_number,
-                "resident_id": resident.id, "resident_name": resident.name,
+                "resident_id": resident.id, "resident_code":resident.resident_code,"resident_name": resident.name,
                 "branch_id": invoice.branch_id, "room_number": invoice.room_number,
                 "month": invoice.month.isoformat(), "due_on": invoice.due_on.isoformat(),
                 "balance": str(balance), "current_days_past_due": (as_of - invoice.due_on).days})
@@ -178,7 +184,9 @@ def financial_report(db: Session, user: User, start: date, end: date,
         payment_count_query = payment_count_query.where(Payment.method == payment_method)
     if (db.scalar(payment_count_query) or 0)>MAX_REPORT_PAYMENTS:
         raise HTTPException(422,"Report has too many payment transactions; narrow the date or branch filters")
-    payment_query = (select(Payment, Invoice, Resident)
+    # Group collections in SQL; only aggregate rows cross the database boundary.
+    local_day=func.date(func.timezone('Asia/Kolkata',Payment.paid_at)) if db.bind.dialect.name=='postgresql' else func.date(Payment.paid_at,'+330 minutes')
+    payment_query = (select(Invoice.branch_id,Invoice.room_number,Payment.method,Payment.recorded_by,local_day.label('day'),func.sum(Payment.amount).label('amount')).select_from(Payment)
                      .join(Invoice, Invoice.id == Payment.invoice_id)
                      .join(Resident, Resident.id == Invoice.resident_id)
                      .where(*payment_scope))
@@ -186,19 +194,26 @@ def financial_report(db: Session, user: User, start: date, end: date,
     if resident_id is not None: payment_query=payment_query.where(Resident.id==resident_id)
     if room_number: payment_query=payment_query.where(Invoice.room_number==room_number.strip())
     if payment_method: payment_query=payment_query.where(Payment.method==payment_method)
-    for payment, invoice, resident in db.execute(payment_query.order_by(Payment.paid_at, Payment.id)):
-        amount = Decimal(payment.amount)
-        collections += amount
-        recent_by_method[payment.method] += amount
-        trend[payment.paid_at.strftime("%Y-%m")] += amount
-        if payment.method == "cash":
-            cash_collected += amount
-            if payment.recorded_by:
-                cash_by_staff[payment.recorded_by] += amount
-        branch = branches.setdefault(invoice.branch_id, {"branch_id": invoice.branch_id,
-            "branch_name": (db.get(Branch, invoice.branch_id).name if invoice.branch_id and db.get(Branch, invoice.branch_id) else "Unassigned"),
-            "collected": ZERO, "overdue": ZERO, "outstanding": ZERO})
-        branch["collected"] += amount
+    payment_query=payment_query.group_by(Invoice.branch_id,Invoice.room_number,Payment.method,Payment.recorded_by,local_day)
+    for group in db.execute(payment_query):
+        amount=Decimal(group.amount)
+        collections+=amount
+        recent_by_method[group.method]+=amount
+        day=group.day if isinstance(group.day,date) else date.fromisoformat(group.day)
+        trend[day.strftime('%Y-%m')]+=amount
+        daily[day.isoformat()]+=amount
+        weekly[(day-timedelta(days=day.weekday())).isoformat()]+=amount
+        if group.method=='cash':
+            cash_collected+=amount
+            if group.recorded_by: cash_by_staff[group.recorded_by]+=amount
+        branch=branches.setdefault(group.branch_id,{'branch_id':group.branch_id,
+            'branch_name':db.get(Branch,group.branch_id).name if group.branch_id and db.get(Branch,group.branch_id) else 'Unassigned',
+            'collected':ZERO,'overdue':ZERO,'outstanding':ZERO})
+        branch['collected']+=amount
+        room=rooms.setdefault((group.branch_id,group.room_number),{'branch_id':group.branch_id,'room_number':group.room_number,
+            'capacity':None,'occupied':0,'billed':ZERO,'paid':ZERO,'outstanding':ZERO,'overdue':ZERO,
+            'settled_count':0,'delay_sum':0,'on_time_count':0})
+        room['collected']=room.get('collected',ZERO)+amount
 
     today=local_today()
     today_query=(select(func.coalesce(func.sum(Payment.amount),0)).join(Invoice,Invoice.id==Payment.invoice_id)
@@ -219,7 +234,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
         for resident in db.scalars(resident_query):
             if resident.id not in residents:
                 current_room=db.get(Room,resident.room_id) if resident.room_id else None
-                residents[resident.id]={"resident_id":resident.id,"resident_name":resident.name,
+                residents[resident.id]={"resident_id":resident.id,"resident_code":resident.resident_code,"resident_name":resident.name,
                     "branch_id":resident.branch_id,"current_room_number":current_room.number if current_room else None,
                     "billed":ZERO,"paid":ZERO,"outstanding":ZERO,"overdue":ZERO,
                     "overdue_invoice_count":0,"current_days_past_due":0,"invoice_count":0,
@@ -229,6 +244,9 @@ def financial_report(db: Session, user: User, start: date, end: date,
     room_query = select(Room)
     if branch_id is not None:
         room_query = room_query.where(Room.branch_id == branch_id)
+    if room_number: room_query=room_query.where(Room.number==room_number.strip())
+    if resident_id is not None:
+        room_query=room_query.where(Room.id==select(Resident.room_id).where(Resident.id==resident_id).scalar_subquery())
     for room in db.scalars(room_query.order_by(Room.branch_id, Room.number)):
         key = (room.branch_id, room.number)
         entry = rooms.setdefault(key, {"branch_id": room.branch_id, "room_number": room.number,
@@ -236,11 +254,9 @@ def financial_report(db: Session, user: User, start: date, end: date,
             "outstanding": ZERO, "overdue": ZERO, "settled_count": 0,
             "delay_sum": 0, "on_time_count": 0})
         entry["capacity"] = room.capacity
-        entry["occupied"] = db.scalar(select(func.count(Resident.id)).where(Resident.room_id == room.id)) or 0
+        entry["occupied"] = db.scalar(select(func.count(Resident.id)).where(Resident.room_id == room.id,Resident.status=="active")) or 0
 
     def finalize(row):
-        row["average_settlement_delay_days"] = (round(row["delay_sum"] / row["settled_count"], 2) if row.get("settled_count") else None)
-        row["on_time_rate_percent"] = (round(row["on_time_count"] * 100 / row["settled_count"], 2) if row.get("settled_count") else None)
         for key in ("billed", "paid", "outstanding", "overdue", "collected"):
             if key in row:
                 row[key] = str(row[key])
@@ -255,6 +271,8 @@ def financial_report(db: Session, user: User, start: date, end: date,
         resident_rows.append(finalize(row))
     room_rows = []
     for row in rooms.values():
+        row.setdefault("collected",ZERO)
+        row.setdefault("overdue_invoice_count",0)
         row["fully_settled_invoice_count"] = row.pop("settled_count")
         row["average_settlement_delay_days"] = round(row.pop("delay_sum") / row["fully_settled_invoice_count"], 2) if row["fully_settled_invoice_count"] else None
         row["on_time_rate_percent"] = round(row.pop("on_time_count") * 100 / row["fully_settled_invoice_count"], 2) if row["fully_settled_invoice_count"] else None
@@ -277,6 +295,8 @@ def financial_report(db: Session, user: User, start: date, end: date,
             "on_time_rate_percent": round(on_time * 100 / len(settled_delays), 2) if settled_delays else None},
         "aging": {k: str(v) for k, v in aging.items()},
         "collections_by_month": [{"month": k, "amount": str(v)} for k, v in sorted(trend.items())],
+        "collections_by_day": [{"day": k, "amount": str(v)} for k, v in sorted(daily.items())],
+        "collections_by_week": [{"week": k, "amount": str(v)} for k, v in sorted(weekly.items())],
         "collections_by_method": [{"method": k, "amount": str(v)} for k, v in sorted(recent_by_method.items())],
         "collections_by_branch": list(branches.values()),
         "cash_by_staff": [{"staff_user_id": k, "staff_email": (db.get(User,k).email if db.get(User,k) else None), "amount": str(v)} for k, v in sorted(cash_by_staff.items())],
@@ -291,7 +311,7 @@ def invoice_rows_for(db, residents, rooms, branches, invoice, resident, report_b
         if resident.room_id:
             current = db.get(Room, resident.room_id)
             current_room_number = current.number if current else None
-        residents[resident.id] = {"resident_id": resident.id, "resident_name": resident.name,
+        residents[resident.id] = {"resident_id": resident.id, "resident_code":resident.resident_code,"resident_name": resident.name,
             "branch_id": report_branch_id, "current_room_number": (current_room_number if resident.branch_id==report_branch_id else None),
             "billed": ZERO, "paid": ZERO, "outstanding": ZERO, "overdue": ZERO,
             "overdue_invoice_count": 0, "current_days_past_due": 0, "invoice_count": 0,
@@ -303,6 +323,6 @@ def invoice_rows_for(db, residents, rooms, branches, invoice, resident, report_b
             "outstanding": ZERO, "overdue": ZERO, "settled_count": 0,
             "delay_sum": 0, "on_time_count": 0}
     return {"invoice_id": invoice.id, "invoice_number": invoice.invoice_number,
-            "resident_id": resident.id, "resident_name": resident.name,
+            "resident_id": resident.id, "resident_code":resident.resident_code,"resident_name": resident.name,
             "branch_id": report_branch_id, "room_number": invoice.room_number,
             "month": invoice.month.isoformat(), "due_on": invoice.due_on.isoformat()}

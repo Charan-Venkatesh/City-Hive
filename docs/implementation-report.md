@@ -1,5 +1,7 @@
 # Cityhive implementation report
 
+> Historical snapshot. For the subsequent integration, migration and release checks, see [the current release audit](RELEASE_AUDIT_2026-10-21.md) and [VALIDATION.md](../VALIDATION.md). Earlier limitations and counts below describe their stated audit point.
+
 Updated 2026-10-21. This report describes the current repository state; see [VALIDATION.md](../VALIDATION.md) for executed checks and limitations.
 
 ## Implemented in this pass

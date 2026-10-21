@@ -51,12 +51,16 @@ def _send_template(phone,template,parameters,kind):
     if not template:
         raise WhatsAppUnavailable('The required approved WhatsApp template is not configured.')
     body={"messaging_product":"whatsapp","to":to,"type":"template","template":{"name":template,"language":{"code":"en"},"components":[{"type":"body","parameters":[{"type":"text","text":str(value)} for value in parameters]}]}}
+    if kind=='authentication':
+        body['template']['components'].append({'type':'button','sub_type':'url','index':'0','parameters':[{'type':'text','text':str(parameters[0])}]})
     url=f"https://graph.facebook.com/{settings.whatsapp_api_version}/{settings.whatsapp_phone_number_id}/messages"
     try:
         response=httpx.post(url,json=body,headers={'Authorization':f'Bearer {settings.whatsapp_access_token}'},timeout=settings.whatsapp_request_timeout)
         response.raise_for_status()
         data=response.json()
-        return data.get('messages',[{}])[0].get('id')
+        message_id=data.get('messages',[{}])[0].get('id')
+        if not isinstance(message_id,str) or not message_id: raise ValueError('Missing provider message identifier')
+        return message_id
     except Exception as exc:
         # Do not return/log provider bodies, access tokens, phone data, or OTPs.
         raise WhatsAppUnavailable('WhatsApp provider delivery failed.') from exc

@@ -5,8 +5,10 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from io import BytesIO
 import smtplib
+import ssl
+import textwrap
 from sqlalchemy import select, func
-from .models import Invoice, Payment, Resident, User, Outbox, now
+from .models import Invoice, Payment, Resident, User, Branch, Outbox, now
 from .config import settings
 from .db import SessionLocal
 from . import whatsapp
@@ -18,7 +20,7 @@ def invoice_pdf(invoice,resident,branch,paid,balance):
         f'Issued: {invoice.issued_on}    Due: {invoice.due_on}',
         f'Branch: {branch.name}',
         f'Address: {branch.address or "Not configured"}',
-        f'Resident: {resident.name}    Resident ID: {resident.id}',
+        f'Resident: {resident.name}    Resident ID: {resident.resident_code}',
         f'Room: {invoice.room_number}    Billing period: {invoice.month:%B %Y}',
         '',
         'Description                                      Amount (INR)',
@@ -33,20 +35,25 @@ def invoice_pdf(invoice,resident,branch,paid,balance):
         'This bill records configured accommodation charges and payments.',
         'No tax or statutory registration claim is made by this document.',
     ]
-    y=790;commands=['BT','/F1 11 Tf']
-    for idx,line in enumerate(lines):
-        if idx==0: commands.extend(['/F1 17 Tf',f'50 {y} Td',f'({pdf_escape(line)}) Tj','/F1 11 Tf'])
-        else: commands.extend(['0 -24 Td',f'({pdf_escape(line)}) Tj'])
-        y-=24
-    commands.append('ET')
-    stream='\n'.join(commands).encode('ascii')
-    objects=[
-        b'<< /Type /Catalog /Pages 2 0 R >>',
-        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
-        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-        b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream',
-    ]
+    return document_pdf(lines)
+
+def document_pdf(lines):
+    lines=[part for line in lines for part in (textwrap.wrap(str(line),width=83,replace_whitespace=False) or [''])]
+    pages=[lines[offset:offset+39] for offset in range(0,len(lines),39)] or [[]]
+    objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'',b'<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>']
+    page_ids=[]
+    for page in pages:
+        page_id=len(objects)+1;page_ids.append(page_id)
+        commands=['BT','/F1 10 Tf','50 790 Td']
+        for index,line in enumerate(page):
+            if index: commands.append('0 -18 Td')
+            commands.append(f'({pdf_escape(line)}) Tj')
+        commands.append('ET')
+        stream='\n'.join(commands).encode('ascii')
+        objects.extend([
+            f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {page_id+1} 0 R >>'.encode(),
+            b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream'])
+    objects[1]=('<< /Type /Pages /Kids ['+' '.join(f'{p} 0 R' for p in page_ids)+f'] /Count {len(page_ids)} >>').encode()
     output=BytesIO();output.write(b'%PDF-1.4\n%\xe2\xe3\xcf\xd3\n');offsets=[0]
     for i,obj in enumerate(objects,1):
         offsets.append(output.tell());output.write(f'{i} 0 obj\n'.encode());output.write(obj);output.write(b'\nendobj\n')
@@ -81,8 +88,8 @@ def receipt_text(db, payment):
 def queue_reminders(db, branch_ids=None):
     today = local_today()
     count = 0
-    # Once per invoice per local calendar day. Future dues are not reminded.
-    query=select(Invoice).where(Invoice.due_on<=today).with_for_update()
+    # At most once per invoice/channel/local day, including the configured upcoming window.
+    query=select(Invoice).where(Invoice.due_on<=today+timedelta(days=settings.upcoming_reminder_days)).with_for_update()
     if branch_ids is not None: query=query.where(Invoice.branch_id.in_(branch_ids))
     for invoice in db.scalars(query):
         balance = invoice.amount-paid_total(db,invoice.id)
@@ -91,9 +98,10 @@ def queue_reminders(db, branch_ids=None):
         resident = db.get(Resident,invoice.resident_id)
         user = db.get(User,resident.user_id)
         body=f'Hi {resident.name},\nYour outstanding fee is INR {balance:.2f} for {invoice.month:%B %Y}. Due date: {invoice.due_on}. Please contact management to pay.\n'
-        db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=key,recipient=user.email,subject=f'Cityhive fee reminder · {invoice.month:%B %Y}',body=body,channel='email'))
+        stage='Upcoming' if invoice.due_on>today else 'Due today' if invoice.due_on==today else 'Overdue'
+        db.add(Outbox(user_id=user.id,branch_id=invoice.branch_id,dedupe_key=key,recipient=user.email,subject=f'Cityhive {stage.lower()} fee reminder · {invoice.month:%B %Y}',body=body,channel='email'))
         if resident.whatsapp_notifications and resident.whatsapp_consent_at and resident.phone and whatsapp.configured():
-            db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=f'{key}:whatsapp',recipient=resident.phone,
+            db.add(Outbox(user_id=user.id,branch_id=invoice.branch_id,dedupe_key=f'{key}:whatsapp',recipient=resident.phone,
                 subject=f'Cityhive fee reminder · {invoice.month:%B %Y}',body=body,channel='whatsapp'))
         db.flush()
         count += 1
@@ -108,8 +116,10 @@ def deliver_emails():
             if item.dedupe_key.startswith('reminder:'):
                 invoice = db.get(Invoice,int(item.dedupe_key.split(':')[1]))
                 balance = invoice.amount-paid_total(db,invoice.id)
-                if balance<=0:
+                resident = db.get(Resident,invoice.resident_id)
+                if balance<=0 or (item.channel=='whatsapp' and (not resident.whatsapp_notifications or not resident.whatsapp_consent_at or resident.phone!=item.recipient)):
                     item.cancelled = True
+                    item.delivery_status = 'cancelled'
                     item.last_error = ''
                     continue
                 resident = db.get(Resident,invoice.resident_id)
@@ -127,7 +137,12 @@ def deliver_emails():
                     msg['From'],msg['To'],msg['Subject'] = settings.mail_from,item.recipient,item.subject
                     msg['Message-ID'] = f'<cityhive-{item.id}@cityhive.local>'
                     msg.set_content(item.body)
-                    with smtplib.SMTP(settings.smtp_host,settings.smtp_port,timeout=5) as smtp: smtp.send_message(msg)
+                    transport=smtplib.SMTP_SSL if settings.smtp_security=='ssl' else smtplib.SMTP
+                    options={'context':ssl.create_default_context()} if settings.smtp_security=='ssl' else {}
+                    with transport(settings.smtp_host,settings.smtp_port,timeout=10,**options) as smtp:
+                        if settings.smtp_security=='starttls': smtp.starttls(context=ssl.create_default_context())
+                        if settings.smtp_username: smtp.login(settings.smtp_username,settings.smtp_password)
+                        smtp.send_message(msg)
                 item.sent_at = now()
                 item.delivery_status='submitted'
                 item.last_error = ''
@@ -137,3 +152,15 @@ def deliver_emails():
                 item.next_attempt_at=now()+timedelta(minutes=min(60,2**item.attempts))
                 if item.channel=='whatsapp': item.last_error='WhatsApp delivery unavailable or failed; check provider configuration'
         db.commit()
+
+
+def receipt_pdf(db,payment):
+    invoice=db.get(Invoice,payment.invoice_id)
+    resident=db.get(Resident,invoice.resident_id)
+    branch=db.get(Branch,invoice.branch_id)
+    lines=receipt_text(db,payment).splitlines()
+    lines[1:1]=[f'Branch: {branch.name if branch else "Historical branch"}',
+                f'Resident reference: {resident.resident_code}',f'Invoice: {invoice.invoice_number}']
+    lines.extend([f'Current invoice balance: INR {invoice.amount-paid_total(db,invoice.id):.2f}',
+                  'Status: REVERSED' if payment.reversed_at else 'Status: PAYMENT RECORDED'])
+    return document_pdf(lines)

@@ -2,6 +2,12 @@
 
 Cityhive is the existing React + FastAPI application extended for two-branch operations. The backend supports SQLite for local development and PostgreSQL through the supplied Compose configuration. It is an operational prototype for the workflows listed below, not a production-ready property-management system; see [VALIDATION.md](VALIDATION.md) for the latest verification and known gaps.
 
+## Current release work
+
+The integration and release changes are recorded in [the release audit](docs/RELEASE_AUDIT_2026-10-21.md). Deployment setup, the Slate API variable, backup/restore instructions, and worker modes are in [DEPLOYMENT.md](docs/DEPLOYMENT.md). The supported browser was disabled; [the acceptance checklist](docs/visual-qa/ACCEPTANCE.md) records the unexecuted browser journeys.
+
+The live Slate site was observed returning homepage HTML for `/api/health` and `/api/branches`. Its real backend address is still unknown. Set frontend `VITE_API_BASE_URL` to the verified HTTPS backend plus `/api`, rebuild, and configure exact backend CORS. Do not put backend credentials in frontend variables. The local development proxy now returns API JSON correctly.
+
 ## Implemented workflows
 
 - Owner, branch-admin, and resident password authentication followed by a WhatsApp OTP challenge before a JWT session is issued. Argon2 password hashing and forced password change for newly assigned branch administrators remain in place. WhatsApp is disabled until configured.
@@ -10,13 +16,13 @@ Cityhive is the existing React + FastAPI application extended for two-branch ope
 - Public branch listings and live room availability; admission requests are deduplicated and reviewed by authorized staff. Approved requests can be enrolled, then allocated through the normal room workflow.
 - Resident stay requests for extension, shift, and vacating. Staff review requests; accepted shifts produce allocation history. Approved vacating retains the room until the scheduled date and outstanding invoice balances are settled.
 - Branch- and sharing-specific effective-dated fee plans with configurable billing and due days and optional labelled monthly charges. Issued invoices preserve their base rate, discount, configured add-on, total and due date as snapshots.
-- Monthly invoice snapshots, fixed monthly discounts, manual cash/UPI/bank payment recording, partial payments, idempotent payment keys, receipts, and downloadable PDF invoices.
+- Monthly invoice snapshots, fixed monthly discounts, optional staff-approved percentage discounts with charge scope/cap/effective months, manual cash/UPI/bank payment recording, partial payments, idempotent payment keys, and downloadable PDF invoices and receipts.
 - Separate deposit and advance ledgers for money actually received, reasoned deductions, and final settlement snapshots. Staff approval and the record of an actual refund are separate actions; the application does not automatically offset invoice balances or impose a deposit-forfeiture rule.
-- Daily due-invoice reminder queueing and an email outbox worker with retries and deduplication. Consenting residents can be queued for WhatsApp utility-template reminders when the provider is configured. Local Compose routes email to Mailpit.
+- Upcoming, due and overdue reminder queueing and an email outbox worker with retries and deduplication. Consenting residents can be queued for WhatsApp utility-template reminders when the provider is configured. Local Compose routes email to Mailpit.
 - Cash/UPI/bank ledger records with payment-time and payer notes, audited reversals, and transaction-based receipt balances. An owner/branch-scoped financial analytics report provides collection, aging, delay, room, resident, overdue invoice, and CSV views.
 - Resident complaint submission, branch-authorized staff assignment, responses, resolution notes, timestamps and append-only history. Staff visibility and assignment choices are branch-scoped.
 - Automatically generated unique resident reference codes and private, branch-scoped basic gate-pass records. Authorized staff can issue, print, and revoke passes; residents can view and print only their own. Pass validity ends on expiry, revocation, or resident vacating. Gate passes do not include scanning or code-validation workflows.
-- Admin/resident dashboards and branch-scoped records.
+- Admin/resident dashboards and branch-scoped records, resident notification history and admission history, owner configuration/worker status, database-backed login/OTP limits, and signed WhatsApp delivery callbacks. External delivery remains unverified.
 
 Identity review is manual and stores only an optional last-four suffix. It is not UIDAI verification. Payments are bookkeeping only; there is no payment gateway. The PDF invoice records configured charges and makes no tax or statutory-registration claims.
 
@@ -34,7 +40,7 @@ With Docker Compose available:
 docker compose up --build -d
 ```
 
-Open `http://localhost:5173` for the application, `http://localhost:8000/docs` for the API, and `http://localhost:8025` for the local Mailpit inbox. The API migrates the database to Alembic `head` during startup. PostgreSQL data lives in the `hostel_db` volume.
+Open `http://localhost:5173` for the application, `http://localhost:8000/docs` for the API, and `http://localhost:8025` for the local Mailpit inbox. With the local default `AUTO_MIGRATE=true`, the API migrates the database to Alembic `head` during startup. Back up an existing database before starting an upgraded version. PostgreSQL data lives in the `hostel_db` volume.
 
 For local backend development, from `backend/` install `requirements.lock.txt`, then run:
 
@@ -49,9 +55,11 @@ The authenticated backend API exposes `GET /api/analytics/financial` and `GET /a
 
 ## Migration safety
 
-Alembic revisions are in `backend/migrations/versions`. Startup upgrades the configured database to `head`; do not use `Base.metadata.create_all()` to evolve an existing deployment. Revision `0001` maps existing room/resident rows using their current relationships. If multiple branches exist and a row has no resolvable branch, it stops and requires an explicit data-owner decision rather than choosing a branch. Revision `0008` backfills historical invoice branch attribution from the resident's current branch; prior branch history cannot be recovered for invoices where the resident moved before that migration. Revision `0009` indexes payment transaction timestamps for report queries. Re-running the upgrade is safe. Downgrades intentionally stop instead of dropping application data; take a database backup before any migration.
+Alembic revisions are in `backend/migrations/versions`. Local startup with `AUTO_MIGRATE=true` upgrades the configured database to `head`; production requires a verified backup and an explicit migration, with `AUTO_MIGRATE=false`. Never assume local and deployed databases are the same; do not use `Base.metadata.create_all()` to evolve an existing deployment. Revision `0001` maps existing room/resident rows using their current relationships. If multiple branches exist and a row has no resolvable branch, it stops and requires an explicit data-owner decision rather than choosing a branch. Revision `0008` backfills historical invoice branch attribution from the resident's current branch; prior branch history cannot be recovered for invoices where the resident moved before that migration. Revision `0009` indexes payment transaction timestamps for report queries. Re-running the upgrade is safe. Downgrades intentionally stop instead of dropping application data; take a database backup before any migration.
 
 Revisions `0011` and `0012` add append-only complaint history, backfilled unique resident codes, and branch-scoped gate passes. Revision `0013` adds effective-dated fee plans and invoice charge snapshots, deposit/advance and settlement audit ledgers, complaint assignment/resolution fields, and historically created a gate-pass validation-events table. Current application code does not map, expose, or write that legacy table; the applied migration and any existing records are retained without a destructive schema change. Revision `0013` uses Alembic batch operations for SQLite foreign-key changes and intentionally refuses downgrade rather than dropping new user data.
+
+Revision `0014_release_completion` adds branch photo/contact configuration, optional percentage approval history and invoice references, outbox user ownership, persistent scheduler status and shared throttle buckets. All earlier revisions and existing invoice/receipt numbering remain intact. Use `python scripts/db_maintenance.py inspect` and its explicit `backup` action before an upgrade; see deployment instructions for restore verification.
 
 To inspect the migration version, run `python -m alembic current` from `backend/`. To upgrade manually, run `python -m alembic upgrade head`.
 
@@ -59,4 +67,4 @@ To inspect the migration version, run `python -m alembic current` from `backend/
 
 Run the backend suite from `backend/` with `.venv/bin/python -m pytest -q`. Tests use a fresh isolated SQLite database by default. If `TEST_DATABASE_URL` is set, the test guard requires a disposable database name ending in `_test`; the workflow fixture drops and recreates its application tables.
 
-A frontend build can be run with `npm run build` where Node/npm are installed. See [VALIDATION.md](VALIDATION.md) for the actual commands and results from this workspace, plus deployment and feature gaps.
+Frontend API configuration/error-path checks run with `npm test`; a production build runs with `npm run build` where Node/npm are installed. See [VALIDATION.md](VALIDATION.md) for the actual commands and results from this workspace, plus deployment and feature gaps.

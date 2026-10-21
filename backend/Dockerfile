@@ -3,4 +3,9 @@ WORKDIR /app
 COPY requirements.lock.txt .
 RUN pip install --no-cache-dir -r requirements.lock.txt
 COPY app ./app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+COPY migrations ./migrations
+COPY alembic.ini ./
+COPY scripts ./scripts
+RUN useradd --create-home --uid 10001 cityhive
+USER cityhive
+CMD ["python", "-m", "app.serve"]

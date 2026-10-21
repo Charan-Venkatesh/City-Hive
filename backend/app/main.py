@@ -12,29 +12,40 @@ from alembic.config import Config
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from threading import Lock
-from time import monotonic
 from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from sqlalchemy import text, inspect
+from alembic.script import ScriptDirectory
+from .models import ResidentDiscount, JobState
+from .schemas import DiscountCreate
+from .rate_limits import consume
 from sqlalchemy import select, func, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, SessionLocal, get_db
 from .models import User, Branch, BranchAdmin, Admission, AdmissionEvent, Room, FeePlan, Resident, Invoice, Payment, PaymentAuditEvent, Complaint, ComplaintEvent, GatePass, FinancialLedgerEvent, FinalSettlement, SettlementEvent, Outbox, AllocationEvent, StayRequest, IdentityReviewEvent, OtpChallenge, AuthAuditEvent, NotificationPreferenceEvent, now
 from .schemas import Login, OtpVerify, OtpResend, NotificationPreference, PaymentReversal, PasswordChange, RoomCreate, RoomUpdate, FeePlanCreate, FeePlanUpdate, ResidentFeePlanUpdate, ResidentCreate, Allocation, IDReview, BillingRun, PaymentCreate, ComplaintCreate, ComplaintUpdate, ComplaintAssignment, FinancialLedgerCreate, SettlementCreate, SettlementDecision, SettlementRefund, BranchCreate, BranchUpdate, BranchAdminCreate, AdmissionCreate, AdmissionDecision, AdmissionEnroll, StayRequestCreate, StayRequestDecision, GatePassCreate
 from .security import hashing, token_for, current_user, active_user, admin, staff, is_owner, is_staff
-from .services import paid_total, receipt_text, invoice_pdf, queue_reminders, deliver_emails, local_today
+from .services import paid_total, receipt_text, receipt_pdf, invoice_pdf, queue_reminders, deliver_emails, local_today
 from .analytics import financial_report
 from . import whatsapp
 
 log = logging.getLogger(__name__)
 def initialize():
+    settings.validate_runtime()
     if len(settings.jwt_secret)<32 or len(settings.admin_password)<10:
         raise RuntimeError('JWT_SECRET needs 32+ characters; ADMIN_PASSWORD needs 10+')
     migration_config=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
     migration_config.set_main_option('sqlalchemy.url',settings.database_url.replace('%','%%'))
-    command.upgrade(migration_config,'head')
+    if settings.auto_migrate:
+        command.upgrade(migration_config,'head')
+    else:
+        with engine.connect() as connection:
+            if 'alembic_version' not in inspect(connection).get_table_names() or connection.scalar(text('SELECT version_num FROM alembic_version')) != ScriptDirectory.from_config(migration_config).get_current_head():
+                raise RuntimeError('Database migration required. Verify a backup and run alembic upgrade head before starting.')
     with SessionLocal() as db:
         if not db.scalar(select(Branch.id).limit(1)):
             db.add(Branch(name='Branch A',description='Configure this location in branch settings.'))
@@ -67,8 +78,9 @@ def process_due_moveouts(db,branch_ids=None):
     return moved
 async def jobs():
     while True:
-        try: await asyncio.to_thread(job_tick)
-        except Exception: log.exception('Background job failed; retrying in 60 seconds')
+        from .worker import run_once
+        try: await asyncio.to_thread(run_once)
+        except Exception: log.error('Background job failed; check worker status and configuration')
         await asyncio.sleep(60)
 @asynccontextmanager
 async def lifespan(app):
@@ -79,23 +91,41 @@ async def lifespan(app):
         task.cancel()
         try: await task
         except asyncio.CancelledError: pass
-app = FastAPI(title="Cityhive Luxury PG's and Co-space API",version='1.0.0',lifespan=lifespan)
+app = FastAPI(title="Cityhive Luxury PG's and Co-space API",version='1.1.0',lifespan=lifespan)
+app.add_middleware(CORSMiddleware,allow_origins=settings.cors_origins,allow_credentials=False,
+                   allow_methods=['GET','POST','PUT','OPTIONS'],allow_headers=['Authorization','Content-Type'],
+                   expose_headers=['Content-Disposition'])
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request,exc):
+    return JSONResponse(status_code=422,content={'detail':[{key:item[key] for key in ('loc','msg','type') if key in item} for item in exc.errors()]})
+
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request,exc):
+    # Do not expose SQL, parameters, credentials or personal records in errors.
+    log.error('Database operation failed (%s)',type(exc).__name__)
+    return JSONResponse(status_code=503,content={'detail':'Service temporarily unavailable. Please retry shortly.'})
+
+@app.middleware('http')
+async def response_security(request,call_next):
+    response=await call_next(request)
+    response.headers['X-Content-Type-Options']='nosniff'
+    response.headers['Referrer-Policy']='no-referrer'
+    response.headers['Cache-Control']='no-store'
+    return response
 
 @app.exception_handler(IntegrityError)
 async def integrity_error(request, exc):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=409,content={'detail':'This record already exists or conflicts with another update. Refresh and retry.'})
 
-login_attempts = {}
-login_lock = Lock()
-otp_ip_attempts = {}
 @app.get('/api/health')
 def health(db: Session = Depends(get_db)):
     db.execute(select(1))
     return {'status':'ok'}
 def branch_data(b):
     return {'id':b.id,'name':b.name,'address':b.address,'contact_phone':b.contact_phone,
-            'description':b.description,'facilities':b.facilities,'rules':b.rules,'notice_days':b.notice_days,'active':b.active,'published':b.published}
+            'contact_email':b.contact_email,'image_url':b.image_url,'description':b.description,'facilities':b.facilities,'rules':b.rules,'notice_days':b.notice_days,'active':b.active,'published':b.published}
 def branch_scope(db,user):
     if is_owner(user): return None
     if user.role!='branch_admin': raise HTTPException(403,'Administrator access required')
@@ -153,17 +183,17 @@ def branches(db: Session = Depends(get_db)):
     return [branch_data(b) for b in db.scalars(select(Branch).where(Branch.active.is_(True),Branch.published.is_(True)).order_by(Branch.id))]
 @app.get('/api/managed-branches')
 def managed_branches(db: Session = Depends(get_db),user: User = Depends(staff)):
-    query=select(Branch).where(Branch.active.is_(True)).order_by(Branch.id)
+    query=select(Branch).order_by(Branch.id)
     scope=branch_scope(db,user)
     if scope is not None: query=query.where(Branch.id.in_(scope))
-    return [branch_data(b) for b in db.scalars(query)]
+    return [dict(branch_data(b),publication_issues=publication_issues(db,b)) for b in db.scalars(query)]
 @app.get('/api/public/branches/{branch_id}/availability')
 def public_availability(branch_id: int,db: Session = Depends(get_db)):
     branch=db.get(Branch,branch_id)
     if not branch or not branch.active or not branch.published: raise HTTPException(404,'Branch not found')
     result=[]
     for room in db.scalars(select(Room).where(Room.branch_id==branch_id).order_by(Room.capacity,Room.monthly_fee)):
-        occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id)) or 0
+        occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id,Resident.status=='active')) or 0
         if room.capacity>occupied:
             cycle=local_today().replace(day=1)
             plan=db.scalar(select(FeePlan).where(FeePlan.branch_id==branch_id,FeePlan.sharing==room.capacity,FeePlan.active.is_(True),
@@ -263,9 +293,12 @@ def add_branch(data: BranchCreate,db: Session = Depends(get_db),user: User = Dep
     return {'id':branch.id}
 @app.put('/api/branches/{branch_id}')
 def update_branch(branch_id: int,data: BranchUpdate,db: Session = Depends(get_db),user: User = Depends(admin)):
-    branch=db.get(Branch,branch_id)
+    branch=db.scalar(select(Branch).where(Branch.id==branch_id).with_for_update())
     if not branch: raise HTTPException(404,'Branch not found')
+    previous_issues=set(publication_issues(db,branch))
     for key,value in data.model_dump().items(): setattr(branch,key,value.strip() if isinstance(value,str) else value)
+    if branch.published and set(publication_issues(db,branch))-previous_issues:
+        raise HTTPException(409,'Unpublish the branch before removing required public details or deactivating it')
     db.commit()
     return {'message':'Branch updated'}
 @app.put('/api/branches/{branch_id}/publication')
@@ -317,12 +350,7 @@ def branch_admins(db: Session = Depends(get_db),user: User = Depends(admin)):
     return result
 @app.post('/api/auth/login')
 def login(data: Login, request: Request, db: Session = Depends(get_db)):
-    key = request.client.host if request.client else 'local'
-    with login_lock:
-        attempts = [t for t in login_attempts.get(key,[]) if monotonic()-t<60]
-        if len(attempts)>=10: raise HTTPException(429,'Too many attempts. Try again in one minute.')
-        attempts.append(monotonic())
-        login_attempts[key] = attempts
+    consume(db,'login',request.client.host if request.client else 'unknown',10,60)
     user = db.scalar(select(User).where(User.email==data.email.strip().lower()))
     if not user or not hashing.verify(data.password,user.password_hash): raise HTTPException(401,'Incorrect email or password')
     phone=user.phone
@@ -351,24 +379,18 @@ def otp_hash(challenge_id,code):
     return hmac.new(settings.jwt_secret.encode(),f'{challenge_id}:{code}'.encode(),hashlib.sha256).hexdigest()
 
 def otp_send_allowed(db,user_id,phone,request):
-    enforce_otp_ip_limit(request)
+    consume(db,'otp-send',request.client.host if request.client else 'unknown',20,3600)
+    db.scalar(select(User).where(User.id==user_id).with_for_update())
     moment=now()
     latest=db.scalar(select(OtpChallenge).where(OtpChallenge.user_id==user_id)
                      .order_by(OtpChallenge.created_at.desc(),OtpChallenge.id.desc()).limit(1))
-    if latest and utc_aware(latest.created_at)>moment-timedelta(seconds=60):
+    if latest and utc_aware(latest.created_at)>moment-timedelta(seconds=settings.otp_resend_seconds):
         raise HTTPException(429,'Please wait before requesting another verification code.')
     recent=db.scalar(select(func.count(OtpChallenge.id)).where(OtpChallenge.user_id==user_id,OtpChallenge.created_at>=moment-timedelta(hours=1))) or 0
     if recent>=5: raise HTTPException(429,'Too many verification codes requested. Try again later.')
     phone_recent=db.scalar(select(func.count(OtpChallenge.id)).where(OtpChallenge.phone==phone,OtpChallenge.created_at>=moment-timedelta(hours=1))) or 0
     if phone_recent>=5: raise HTTPException(429,'Too many verification codes requested. Try again later.')
     return moment
-
-def enforce_otp_ip_limit(request):
-    key=request.client.host if request.client else 'local'
-    with login_lock:
-        attempts=[t for t in otp_ip_attempts.get(key,[]) if monotonic()-t<3600]
-        if len(attempts)>=20: raise HTTPException(429,'Too many verification requests. Try again later.')
-        attempts.append(monotonic()); otp_ip_attempts[key]=attempts
 
 def create_otp_challenge(db,user,phone,request,previous=None):
     if not whatsapp.configured():
@@ -379,7 +401,8 @@ def create_otp_challenge(db,user,phone,request,previous=None):
     code=f'{secrets.randbelow(1_000_000):06d}'
     challenge=OtpChallenge(challenge_id=challenge_id,user_id=user.id,purpose='login',phone=phone,
         code_hash=otp_hash(challenge_id,code),created_at=moment,last_sent_at=moment,
-        expires_at=moment+timedelta(minutes=5),attempts=0)
+        expires_at=moment+timedelta(seconds=settings.otp_expiry_seconds),attempts=0)
+    db.execute(update(OtpChallenge).where(OtpChallenge.user_id==user.id,OtpChallenge.consumed_at.is_(None)).values(consumed_at=moment))
     if previous:
         previous.consumed_at=moment
     db.add(challenge); db.flush()
@@ -391,7 +414,7 @@ def create_otp_challenge(db,user,phone,request,previous=None):
     audit_auth(db,user.id,'otp_sent',request)
     db.commit()
     return {'challenge_id':challenge_id,'masked_phone':mask_phone(phone),
-            'expires_in_seconds':300,'resend_after_seconds':60,'message':'Enter the verification code sent to your WhatsApp.'}
+            'expires_in_seconds':settings.otp_expiry_seconds,'resend_after_seconds':settings.otp_resend_seconds,'message':'Enter the verification code sent to your WhatsApp.'}
 
 @app.post('/api/auth/otp/resend')
 def resend_otp(data: OtpResend,request: Request,db: Session=Depends(get_db)):
@@ -404,7 +427,7 @@ def resend_otp(data: OtpResend,request: Request,db: Session=Depends(get_db)):
 
 @app.post('/api/auth/otp/verify')
 def verify_otp(data: OtpVerify,request: Request,db: Session=Depends(get_db)):
-    enforce_otp_ip_limit(request)
+    consume(db,'otp-verify',request.client.host if request.client else 'unknown',50,3600)
     challenge=db.scalar(select(OtpChallenge).where(OtpChallenge.challenge_id==data.challenge_id).with_for_update())
     if not challenge or challenge.consumed_at:
         raise HTTPException(400,'The verification code is invalid or expired. Sign in again.')
@@ -412,12 +435,12 @@ def verify_otp(data: OtpVerify,request: Request,db: Session=Depends(get_db)):
     if utc_aware(challenge.expires_at)<=moment:
         challenge.consumed_at=moment; audit_auth(db,challenge.user_id,'otp_expired',request); db.commit()
         raise HTTPException(400,'The verification code has expired. Sign in again.')
-    if challenge.attempts>=5:
+    if challenge.attempts>=settings.otp_max_attempts:
         challenge.consumed_at=moment; audit_auth(db,challenge.user_id,'otp_locked',request); db.commit()
         raise HTTPException(429,'Too many incorrect codes. Sign in again to request a new code.')
     challenge.attempts+=1
     if not hmac.compare_digest(challenge.code_hash,otp_hash(challenge.challenge_id,data.code)):
-        if challenge.attempts>=5: challenge.consumed_at=moment
+        if challenge.attempts>=settings.otp_max_attempts: challenge.consumed_at=moment
         audit_auth(db,challenge.user_id,'otp_invalid',request); db.commit()
         raise HTTPException(400,'The verification code is incorrect.')
     user=db.get(User,challenge.user_id)
@@ -709,10 +732,14 @@ def resident_data(db,r):
         plan=None
     base=Decimal(plan.monthly_fee if plan else room.monthly_fee) if room else None
     additional=Decimal(plan.additional_charge_amount) if plan and room else Decimal('0.00')
-    return {'id':r.id,'resident_code':r.resident_code,'branch_id':r.branch_id,'name':r.name,'email':db.get(User,r.user_id).email,'phone':r.phone,'guardian':r.guardian,
+    discount_amount,_=applicable_discount(db,r,base,additional,cycle) if room else (Decimal('0'),None)
+    admission=db.scalar(select(Admission).where(Admission.resident_id==r.id))
+    branch=db.get(Branch,r.branch_id)
+    return {'admission_id':admission.id if admission else None,'admission_status':admission.status if admission else 'Direct admission',
+            'branch_name':branch.name if branch else None,'id':r.id,'resident_code':r.resident_code,'branch_id':r.branch_id,'name':r.name,'email':db.get(User,r.user_id).email,'phone':r.phone,'guardian':r.guardian,
             'guardian_phone':r.guardian_phone,'institution':r.institution,'joined_on':r.joined_on,'planned_move_out':r.planned_move_out,'status':r.status,'room_id':r.room_id,
             'room_number':room.number if room else None,'discount':str(r.discount),'fee_plan_id':plan.id if plan else None,
-            'monthly_fee':str(max(Decimal('0'),base-r.discount)+additional) if room else None,
+            'monthly_fee':str(base+additional-discount_amount) if room else None,
             'additional_charge_label':plan.additional_charge_label if plan else '',
             'aadhaar_last4':r.aadhaar_last4,'id_status':r.id_status,'id_reviewed_at':r.id_reviewed_at}
 @app.get('/api/residents')
@@ -800,7 +827,11 @@ def allocate(resident_id: int,data: Allocation,db: Session = Depends(get_db),use
     occupied = db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id,Resident.id!=resident.id,Resident.status=='active'))
     if resident.status!='active': raise HTTPException(409,'Vacated residents cannot be allocated')
     if occupied>=room.capacity: raise HTTPException(409,'This room is full')
-    if data.discount>room.monthly_fee: raise HTTPException(400,'Discount cannot exceed room fee')
+    plan=resolve_fee_plan(db,resident,room,local_today().replace(day=1))
+    base_fee=Decimal(plan.monthly_fee) if plan else room.monthly_fee
+    if data.discount>base_fee: raise HTTPException(400,'Discount cannot exceed accommodation fee')
+    if data.discount and db.scalar(select(ResidentDiscount.id).where(ResidentDiscount.resident_id==resident.id,ResidentDiscount.revoked_at.is_(None),ResidentDiscount.effective_until>=local_today().replace(day=1))):
+        raise HTTPException(409,'Revoke the percentage approval before assigning a fixed discount')
     previous_room_id=resident.room_id
     resident.room_id,resident.discount = room.id,data.discount
     if previous_room_id!=room.id:
@@ -812,7 +843,8 @@ def review(resident_id: int,data: IDReview,db: Session = Depends(get_db),user: U
     resident = db.get(Resident,resident_id)
     if not resident: raise HTTPException(404,'Resident not found')
     require_resident_branch(db,user,resident)
-    if not resident.aadhaar_last4: raise HTTPException(400,'Aadhaar last four digits were not recorded')
+    if data.aadhaar_last4 is not None: resident.aadhaar_last4=data.aadhaar_last4
+    if not resident.aadhaar_last4: raise HTTPException(400,'Record only the last four digits after inspecting the document privately')
     old_status=resident.id_status
     resident.id_status,resident.id_reviewed_by,resident.id_reviewed_at = data.status,user.id,now()
     db.add(IdentityReviewEvent(resident_id=resident.id,reviewer_id=user.id,old_status=old_status,new_status=data.status,note=data.note))
@@ -849,7 +881,7 @@ def invoices_data(db,user):
         result.append({'id':i.id,'resident_id':i.resident_id,'resident_name':db.get(Resident,i.resident_id).name,
                        'invoice_number':i.invoice_number,'issued_on':i.issued_on,'month':i.month,'due_on':i.due_on,'branch_id':i.branch_id,'room_number':i.room_number,'base_fee':str(i.base_fee),
                        'fee_plan_id':i.fee_plan_id,'additional_charge_label':i.additional_charge_label,'additional_charge_amount':str(i.additional_charge_amount),
-                       'discount':str(i.discount),'amount':str(i.amount),'paid':str(paid),'balance':str(i.amount-paid),
+                       'discount_percent':str(i.discount_percent),'discount':str(i.discount),'amount':str(i.amount),'paid':str(paid),'balance':str(i.amount-paid),
                        'status':'paid' if paid>=i.amount else ('overdue' if i.due_on<local_today() else 'due')})
     return result
 @app.get('/api/invoices')
@@ -866,6 +898,16 @@ def invoice_download(invoice_id: int,db: Session = Depends(get_db),user: User = 
     paid=paid_total(db,invoice.id);balance=invoice.amount-paid
     return Response(invoice_pdf(invoice,resident,branch,paid,balance),media_type='application/pdf',
                     headers={'Content-Disposition':f'attachment; filename="{invoice.invoice_number}.pdf"'})
+def applicable_discount(db,resident,base_fee,additional_amount,month):
+    rule=db.scalar(select(ResidentDiscount).where(ResidentDiscount.resident_id==resident.id,ResidentDiscount.revoked_at.is_(None),ResidentDiscount.effective_from<=month,ResidentDiscount.effective_until>=month))
+    amount=min(base_fee,Decimal(resident.discount))
+    if rule:
+        if resident.discount: raise HTTPException(409,'Fixed and percentage discounts cannot be combined')
+        eligible=base_fee+(additional_amount if rule.charge_scope=='all_monthly' else Decimal('0'))
+        amount=(eligible*rule.percentage/100).quantize(Decimal('0.01'))
+        if rule.max_amount is not None: amount=min(amount,rule.max_amount)
+    return amount,rule
+
 @app.post('/api/billing/generate')
 def billing(data: BillingRun,db: Session = Depends(get_db),user: User = Depends(staff)):
     month = data.month.replace(day=1)
@@ -886,10 +928,12 @@ def billing(data: BillingRun,db: Session = Depends(get_db),user: User = Depends(
         additional_label=plan.additional_charge_label if plan else ''
         due_day=plan.due_day if plan else 5
         invoice_number=f'SW-{resident.branch_id:03d}-{month:%Y%m}-{resident.id:06d}'
-        invoice_amount=max(Decimal('0.00'),base_fee-Decimal(resident.discount))+additional_amount
+        discount_amount,discount_rule=applicable_discount(db,resident,base_fee,additional_amount,month)
+        invoice_amount=base_fee+additional_amount-discount_amount
         db.add(Invoice(invoice_number=invoice_number,issued_on=local_today(),resident_id=resident.id,branch_id=resident.branch_id,fee_plan_id=plan.id if plan else None,
                        month=month,due_on=month.replace(day=due_day),room_number=room.number,base_fee=base_fee,additional_charge_label=additional_label,
-                       additional_charge_amount=additional_amount,discount=resident.discount,amount=invoice_amount))
+                       additional_charge_amount=additional_amount,discount=discount_amount,amount=invoice_amount,
+                       discount_rule_id=discount_rule.id if discount_rule else None,discount_percent=discount_rule.percentage if discount_rule else 0))
         db.flush(); count+=1
     db.commit()
     return {'created':count}
@@ -913,7 +957,7 @@ def payment(data: PaymentCreate,db: Session = Depends(get_db),user: User = Depen
     p = Payment(**data.model_dump(exclude={'paid_at'}),paid_at=paid_at,recorded_by=user.id)
     db.add(p); db.flush()
     resident = invoice_resident
-    db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=f'receipt:{p.id}',recipient=db.get(User,resident.user_id).email,
+    db.add(Outbox(user_id=resident.user_id,branch_id=invoice.branch_id,dedupe_key=f'receipt:{p.id}',recipient=db.get(User,resident.user_id).email,
                   subject=f"Cityhive payment receipt SW-{p.id:06d}",body=receipt_text(db,p)))
     db.commit()
     return {'id':p.id,'message':'Payment recorded; receipt email queued'}
@@ -922,7 +966,7 @@ def payment(data: PaymentCreate,db: Session = Depends(get_db),user: User = Depen
 def reverse_payment(payment_id: int,data: PaymentReversal,db: Session=Depends(get_db),user: User=Depends(staff)):
     payment=db.scalar(select(Payment).where(Payment.id==payment_id).with_for_update())
     if not payment: raise HTTPException(404,'Payment not found')
-    invoice=db.get(Invoice,payment.invoice_id)
+    invoice=db.scalar(select(Invoice).where(Invoice.id==payment.invoice_id).with_for_update())
     resident=db.get(Resident,invoice.resident_id)
     require_branch(db,user,invoice.branch_id)
     if payment.reversed_at: raise HTTPException(409,'This payment has already been reversed')
@@ -931,7 +975,7 @@ def reverse_payment(payment_id: int,data: PaymentReversal,db: Session=Depends(ge
     resident_user=db.get(User,resident.user_id)
     key=f'payment-reversal:{payment.id}'
     if resident_user:
-        db.add(Outbox(branch_id=invoice.branch_id,dedupe_key=key,recipient=resident_user.email,
+        db.add(Outbox(user_id=resident.user_id,branch_id=invoice.branch_id,dedupe_key=key,recipient=resident_user.email,
             subject=f'Cityhive payment update · SW-{payment.id:06d}',body=receipt_text(db,payment)))
     db.commit()
     return {'id':payment.id,'status':'reversed','balance':str(invoice.amount-paid_total(db,invoice.id))}
@@ -1100,6 +1144,7 @@ def decide_stay_request(request_id: int,data: StayRequestDecision,db: Session = 
     require_resident_branch(db,user,resident)
     if request.status!='pending': raise HTTPException(409,'This stay request has already been reviewed')
     if data.status=='approved':
+        if resident.status!='active': raise HTTPException(409,'This resident has already vacated')
         if request.request_type=='extension':
             if request.requested_move_out<=local_today() or (resident.planned_move_out and request.requested_move_out<=resident.planned_move_out):
                 raise HTTPException(409,'The extension date is no longer valid')
@@ -1107,7 +1152,9 @@ def decide_stay_request(request_id: int,data: StayRequestDecision,db: Session = 
         elif request.request_type=='vacating':
             resident.planned_move_out=request.requested_move_out
         elif request.request_type=='shift':
-            target=db.scalar(select(Room).where(Room.id==request.target_room_id).with_for_update())
+            room_ids=sorted({i for i in (resident.room_id,request.target_room_id) if i is not None})
+            locked=db.scalars(select(Room).where(Room.id.in_(room_ids)).order_by(Room.id).with_for_update()).all()
+            target=next((room for room in locked if room.id==request.target_room_id),None)
             if not target or target.branch_id!=resident.branch_id: raise HTTPException(409,'The requested room is no longer valid')
             occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==target.id,Resident.status=='active')) or 0
             if occupied>=target.capacity: raise HTTPException(409,'Target room is now full')
@@ -1176,7 +1223,7 @@ def merge_financial_reports(reports,from_date,to_date,as_of):
                     'average_settlement_delay_days':None,'settled_invoice_count':0,
                     'on_time_settlement_count':0,'on_time_rate_percent':None})
     aging={key:Decimal('0') for key in ('not_due','1_7_days','8_30_days','31_60_days','61_plus_days')}
-    methods={}; trend={}; staff_totals={}; residents=[]; rooms=[]; branches=[]; overdue_invoices=[]
+    methods={}; trend={}; daily={}; weekly={}; staff_totals={}; residents=[]; rooms=[]; branches=[]; overdue_invoices=[]
     overdue_resident_ids=set()
     for report in reports:
         for key in ('billed','collected','collected_today','cash_collected','outstanding','overdue'):
@@ -1187,6 +1234,8 @@ def merge_financial_reports(reports,from_date,to_date,as_of):
         for key,value in report['aging'].items(): aging[key]+=Decimal(value)
         for row in report['collections_by_method']: methods[row['method']]=methods.get(row['method'],Decimal('0'))+Decimal(row['amount'])
         for row in report['collections_by_month']: trend[row['month']]=trend.get(row['month'],Decimal('0'))+Decimal(row['amount'])
+        for row in report.get('collections_by_day',[]): daily[row['day']]=daily.get(row['day'],Decimal('0'))+Decimal(row['amount'])
+        for row in report.get('collections_by_week',[]): weekly[row['week']]=weekly.get(row['week'],Decimal('0'))+Decimal(row['amount'])
         for row in report['cash_by_staff']:
             staff_totals.setdefault(row['staff_user_id'],{'staff_email':row.get('staff_email'),'amount':Decimal('0')})
             staff_totals[row['staff_user_id']]['amount']+=Decimal(row['amount'])
@@ -1204,6 +1253,8 @@ def merge_financial_reports(reports,from_date,to_date,as_of):
         'definitions':reports[0]['definitions'] if reports else {},'summary':summary,
         'aging':{k:str(v) for k,v in aging.items()},
         'collections_by_month':[{'month':k,'amount':str(v)} for k,v in sorted(trend.items())],
+        'collections_by_day':[{'day':k,'amount':str(v)} for k,v in sorted(daily.items())],
+        'collections_by_week':[{'week':k,'amount':str(v)} for k,v in sorted(weekly.items())],
         'collections_by_method':[{'method':k,'amount':str(v)} for k,v in sorted(methods.items())],
         'collections_by_branch':branches,
         'cash_by_staff':[{'staff_user_id':k,'staff_email':v['staff_email'],'amount':str(v['amount'])} for k,v in sorted(staff_totals.items())],
@@ -1220,7 +1271,7 @@ def financial_analytics(from_date: date, to_date: date, as_of: date | None = Non
 
 def csv_safe(value):
     text='' if value is None else str(value)
-    return "'"+text if text.startswith(('=','+','-','@','\t','\r')) else text
+    return "'"+text if text.lstrip().startswith(('=','+','-','@')) or text.startswith(('\t','\r','\n')) else text
 
 @app.get('/api/analytics/financial.csv')
 def financial_analytics_csv(from_date: date, to_date: date, as_of: date | None = None,
@@ -1235,3 +1286,141 @@ def financial_analytics_csv(from_date: date, to_date: date, as_of: date | None =
     for row in report['residents']:
         writer.writerow([row['resident_id'],csv_safe(row['resident_name']),row['branch_id'],csv_safe(row['current_room_number']),row['billed'],row['paid'],row['outstanding'],row['overdue'],row['overdue_invoice_count'],row['average_settlement_delay_days'],row['fully_settled_invoice_count'],row['on_time_rate_percent']])
     return Response(output.getvalue(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="cityhive-financial-report.csv"'})
+
+# Release operations are additive: historical API paths and identifiers remain valid.
+def publication_issues(db,branch):
+    issues=[]
+    if not branch.active: issues.append('Activate this branch')
+    if not branch.address.strip(): issues.append('Add the verified address or locality')
+    if not branch.description.strip() or any(x in branch.description.casefold() for x in ['configure this location','branch settings']):
+        issues.append('Write a public description')
+    if not db.scalar(select(Room.id).where(Room.branch_id==branch.id).limit(1)):
+        issues.append('Add a room with sharing capacity and monthly charges')
+    return issues
+
+@app.get('/api/build')
+def build_information():
+    return {'service':'cityhive-api','version':app.version,'release':settings.release_id}
+
+@app.get('/api/deployment-status')
+def deployment_status(db: Session=Depends(get_db),user: User=Depends(admin)):
+    job=db.get(JobState,'reminders-and-moveouts')
+    cfg=Config(str(Path(__file__).resolve().parents[1]/'alembic.ini'))
+    revision=db.scalar(text('SELECT version_num FROM alembic_version')) if inspect(db.bind).has_table('alembic_version') else 'unversioned'
+    return {'release':settings.release_id,'environment':settings.app_environment,
+        'database_engine':db.bind.dialect.name,'schema_revision':revision,'expected_revision':ScriptDirectory.from_config(cfg).get_current_head(),
+        'whatsapp':whatsapp.status(),'smtp':{'configured':settings.smtp_host not in {'','localhost'},'security':settings.smtp_security},
+        'scheduler':{'mode':'api_process' if settings.jobs_enabled else 'external_worker_required','status':job.status if job else 'never_run',
+                     'last_started_at':job.last_started_at if job else None,'last_succeeded_at':job.last_succeeded_at if job else None},
+        'percentage_discounts_enabled':settings.percentage_discounts_enabled}
+
+@app.post('/api/internal/jobs/run')
+def scheduled_job(request: Request):
+    supplied=request.headers.get('X-Cityhive-Job-Token','')
+    if not settings.job_runner_token or not hmac.compare_digest(supplied,settings.job_runner_token):
+        raise HTTPException(401,'Scheduler authentication required')
+    from .worker import run_once
+    return run_once()
+
+@app.get('/api/payments/{payment_id}/receipt.pdf')
+def receipt_download(payment_id: int,db: Session=Depends(get_db),user: User=Depends(active_user)):
+    payment=db.get(Payment,payment_id)
+    if not payment: raise HTTPException(404,'Receipt not found')
+    invoice=db.get(Invoice,payment.invoice_id)
+    if is_staff(user): require_branch(db,user,invoice.branch_id)
+    elif invoice.resident_id!=resident_for(db,user).id: raise HTTPException(403,'Receipt belongs to another resident')
+    return Response(receipt_pdf(db,payment),media_type='application/pdf',
+                    headers={'Content-Disposition':f'attachment; filename="SW-{payment.id:06d}.pdf"'})
+
+@app.get('/api/my/notifications')
+def my_notifications(db: Session=Depends(get_db),user: User=Depends(active_user)):
+    resident_for(db,user)
+    records=db.scalars(select(Outbox).where(Outbox.user_id==user.id).order_by(Outbox.id.desc()).limit(100))
+    return [{'id':item.id,'subject':item.subject,'body':item.body,'channel':item.channel,
+             'status':'cancelled' if item.cancelled else item.delivery_status,'sent_at':item.sent_at} for item in records]
+
+@app.get('/api/admissions/{admission_id}/history')
+def admission_history(admission_id: int,db: Session=Depends(get_db),user: User=Depends(active_user)):
+    admission=db.get(Admission,admission_id)
+    if not admission: raise HTTPException(404,'Admission not found')
+    if is_staff(user): require_branch(db,user,admission.branch_id)
+    elif admission.resident_id!=resident_for(db,user).id: raise HTTPException(403,'Admission belongs to another resident')
+    return [{'old_status':item.old_status,'new_status':item.new_status,'note':item.note if is_staff(user) else '',
+             'created_at':item.created_at} for item in db.scalars(select(AdmissionEvent).where(AdmissionEvent.admission_id==admission_id).order_by(AdmissionEvent.id))]
+
+def discount_data(item):
+    return {'id':item.id,'resident_id':item.resident_id,'percentage':str(item.percentage),'charge_scope':item.charge_scope,
+        'max_amount':str(item.max_amount) if item.max_amount is not None else None,'effective_from':item.effective_from,
+        'effective_until':item.effective_until,'reason':item.reason,'approved_by':item.approved_by,'created_at':item.created_at,
+        'revoked_at':item.revoked_at}
+
+@app.get('/api/residents/{resident_id}/discounts')
+def discounts(resident_id: int,db: Session=Depends(get_db),user: User=Depends(active_user)):
+    resident=db.get(Resident,resident_id)
+    if not resident: raise HTTPException(404,'Resident not found')
+    if is_staff(user): require_resident_branch(db,user,resident)
+    elif resident.user_id!=user.id: raise HTTPException(403,'Discount belongs to another resident')
+    return {'enabled':settings.percentage_discounts_enabled,'rules':[discount_data(item) for item in db.scalars(
+        select(ResidentDiscount).where(ResidentDiscount.resident_id==resident.id).order_by(ResidentDiscount.id.desc()))]}
+
+@app.post('/api/residents/{resident_id}/discounts',status_code=201)
+def approve_discount(resident_id: int,data: DiscountCreate,db: Session=Depends(get_db),user: User=Depends(staff)):
+    if not settings.percentage_discounts_enabled: raise HTTPException(409,'Percentage discounts have not been enabled by management')
+    resident=db.scalar(select(Resident).where(Resident.id==resident_id).with_for_update())
+    if not resident: raise HTTPException(404,'Resident not found')
+    require_resident_branch(db,user,resident)
+    if resident.discount: raise HTTPException(409,'Remove the fixed allocation discount before approving a percentage discount')
+    if data.effective_from<local_today().replace(day=1): raise HTTPException(422,'Approval cannot begin before the current billing month')
+    if db.scalar(select(Invoice.id).where(Invoice.resident_id==resident_id,Invoice.month>=data.effective_from,Invoice.month<=data.effective_until).limit(1)):
+        raise HTTPException(409,'Select unbilled months; issued invoices cannot be changed')
+    if db.scalar(select(ResidentDiscount.id).where(ResidentDiscount.resident_id==resident_id,ResidentDiscount.revoked_at.is_(None),
+        ResidentDiscount.effective_from<=data.effective_until,ResidentDiscount.effective_until>=data.effective_from).limit(1)):
+        raise HTTPException(409,'An approved discount already covers these months')
+    item=ResidentDiscount(resident_id=resident.id,approved_by=user.id,**data.model_dump());db.add(item);db.commit()
+    return discount_data(item)
+
+@app.put('/api/discounts/{discount_id}/revoke')
+def revoke_discount(discount_id: int,db: Session=Depends(get_db),user: User=Depends(staff)):
+    item=db.get(ResidentDiscount,discount_id)
+    if not item: raise HTTPException(404,'Discount not found')
+    resident=db.scalar(select(Resident).where(Resident.id==item.resident_id).with_for_update())
+    require_resident_branch(db,user,resident)
+    if item.revoked_at: raise HTTPException(409,'Discount is already revoked')
+    item.revoked_at=now();item.revoked_by=user.id;db.commit()
+    return {'message':'Future application stopped. Issued invoice snapshots remain unchanged.'}
+
+@app.get('/api/notifications/whatsapp/webhook')
+def verify_whatsapp_webhook(request: Request):
+    query=request.query_params
+    if not settings.whatsapp_verify_token or query.get('hub.mode')!='subscribe' or not hmac.compare_digest(query.get('hub.verify_token',''),settings.whatsapp_verify_token):
+        raise HTTPException(403,'Webhook verification failed')
+    return PlainTextResponse(query.get('hub.challenge',''))
+
+@app.post('/api/notifications/whatsapp/webhook')
+async def whatsapp_delivery_webhook(request: Request,db: Session=Depends(get_db)):
+    chunks=[];size=0
+    async for chunk in request.stream():
+        size+=len(chunk)
+        if size>262144: raise HTTPException(413,'Payload too large')
+        chunks.append(chunk)
+    body=b''.join(chunks)
+    signature=request.headers.get('X-Hub-Signature-256','')
+    expected='sha256='+hmac.new(settings.whatsapp_app_secret.encode(),body,hashlib.sha256).hexdigest()
+    if not settings.whatsapp_app_secret or not hmac.compare_digest(signature,expected): raise HTTPException(403,'Invalid webhook signature')
+    import json
+    try:
+        payload=json.loads(body)
+        updates=[status for entry in payload.get('entry',[]) for change in entry.get('changes',[]) for status in change.get('value',{}).get('statuses',[])]
+    except (ValueError,AttributeError,TypeError): raise HTTPException(400,'Invalid webhook payload')
+    rank={'queued':0,'retrying':0,'submitted':1,'sent':2,'failed':2.5,'delivered':3,'read':4}
+    for update_ in updates:
+        if not isinstance(update_,dict): continue
+        status=update_.get('status')
+        if not isinstance(update_.get('id'),str) or not update_['id']: continue
+        if status not in {'sent','delivered','read','failed'}: continue
+        record=db.scalar(select(Outbox).where(Outbox.channel=='whatsapp',Outbox.provider_message_id==update_.get('id')).with_for_update())
+        if record and rank.get(status,0)>rank.get(record.delivery_status,0):
+            record.delivery_status=status
+            if status=='failed': record.last_error='Provider reported delivery failure; review the provider console'
+    db.commit()
+    return {'status':'accepted'}

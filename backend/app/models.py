@@ -21,6 +21,8 @@ class Branch(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True)
     address: Mapped[str] = mapped_column(String(300), default='')
     contact_phone: Mapped[str] = mapped_column(String(30), default='')
+    contact_email: Mapped[str] = mapped_column(String(254), default='', server_default='')
+    image_url: Mapped[str] = mapped_column(String(1000), default='', server_default='')
     description: Mapped[str] = mapped_column(Text, default='')
     facilities: Mapped[str] = mapped_column(Text, default='')
     rules: Mapped[str] = mapped_column(Text, default='')
@@ -161,6 +163,8 @@ class Invoice(Base):
     additional_charge_label: Mapped[str] = mapped_column(String(100),default='')
     additional_charge_amount: Mapped[Decimal] = mapped_column(Numeric(12,2),default=0)
     discount: Mapped[Decimal] = mapped_column(Numeric(12,2))
+    discount_rule_id: Mapped[int | None] = mapped_column(ForeignKey('resident_discounts.id'),nullable=True)
+    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5,2),default=0,server_default='0')
     amount: Mapped[Decimal] = mapped_column(Numeric(12,2))
 class Payment(Base):
     __tablename__ = 'payments'
@@ -178,6 +182,38 @@ class Payment(Base):
     reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
     reversed_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'),nullable=True)
     reversal_reason: Mapped[str] = mapped_column(String(500),default='')
+
+class ResidentDiscount(Base):
+    __tablename__ = 'resident_discounts'
+    __table_args__ = (CheckConstraint('percentage > 0 AND percentage <= 100'),
+                     CheckConstraint("charge_scope IN ('accommodation','all_monthly')"),
+                     CheckConstraint('max_amount IS NULL OR max_amount >= 0'),
+                     CheckConstraint('effective_until >= effective_from'))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resident_id: Mapped[int] = mapped_column(ForeignKey('residents.id'),index=True)
+    percentage: Mapped[Decimal] = mapped_column(Numeric(5,2))
+    charge_scope: Mapped[str] = mapped_column(String(20))
+    max_amount: Mapped[Decimal | None] = mapped_column(Numeric(12,2),nullable=True)
+    effective_from: Mapped[date] = mapped_column(Date)
+    effective_until: Mapped[date] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(String(500))
+    approved_by: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'),nullable=True)
+
+class JobState(Base):
+    __tablename__ = 'job_state'
+    name: Mapped[str] = mapped_column(String(40),primary_key=True)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    last_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    status: Mapped[str] = mapped_column(String(20),default='never_run')
+
+class RateLimitBucket(Base):
+    __tablename__ = 'rate_limit_buckets'
+    key: Mapped[str] = mapped_column(String(100),primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True),index=True)
+    attempts: Mapped[int] = mapped_column(default=0)
 
 class PaymentAuditEvent(Base):
     __tablename__ = 'payment_audit_events'
@@ -305,6 +341,7 @@ class SettlementEvent(Base):
 class Outbox(Base):
     __tablename__ = 'outbox'
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'),nullable=True,index=True)
     branch_id: Mapped[int | None] = mapped_column(ForeignKey('branches.id'),index=True)
     dedupe_key: Mapped[str] = mapped_column(String(120), unique=True)
     recipient: Mapped[str] = mapped_column(String(254))

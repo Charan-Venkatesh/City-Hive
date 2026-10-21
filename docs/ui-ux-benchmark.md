@@ -11,7 +11,7 @@ Reviewed on 2026-10-21. This is a focused review of public product patterns, not
 
 These sites support familiar discovery patterns: start with a clear location/property choice, make room or sharing options scannable, and put an enquiry action beside relevant inventory. Cityhive adopts these patterns with its own navy/royal-blue/gold palette, supplied Cityhive emblem, and existing application APIs. Branch availability, room pricing, descriptions, and facilities are sourced from configured data; absent data is presented as unconfigured rather than filled in.
 
-Cityhive deliberately retains the existing admission-review process: an enquiry does not reserve a room or guarantee admission. It also avoids copied competitor layouts and third-party logos or photographs. The locally coded hero illustration is not presented as a photograph of a Cityhive property.
+Cityhive deliberately retains the existing admission-review process: an enquiry does not reserve a room or guarantee admission. It also avoids copied competitor layouts and third-party logos or photographs. The current hero uses the existing project-generated representative room image, clearly labeled illustrative. Its provenance is recorded in the 2026-10-21 redesign section of VALIDATION.md. Approved branch photographs can be configured individually; no generated scene is presented as an actual Cityhive property.
 
 ## Technical references reviewed
 
