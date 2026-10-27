@@ -9,17 +9,17 @@ from .db import get_db
 from .models import User
 hashing = PasswordHash.recommended()
 bearer = HTTPBearer(auto_error=False)
-def token_for(user,mfa_verified=False):
-    claims={'sub':str(user.id),'exp':datetime.now(timezone.utc)+timedelta(hours=8)}
-    if mfa_verified: claims['amr']=['pwd','whatsapp_otp']
+def token_for(user,mfa_verified=False,channel="whatsapp"):
+    claims={'sub':str(user.id),'exp':datetime.now(timezone.utc)+timedelta(hours=8),'ver':user.session_version or 0}
+    if mfa_verified: claims['amr']=['pwd',channel+'_otp']
     return jwt.encode(claims,settings.jwt_secret,algorithm='HS256')
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)):
     try:
         if not credentials: raise ValueError()
         payload = jwt.decode(credentials.credentials,settings.jwt_secret,algorithms=['HS256'])
-        if payload.get('amr') != ['pwd','whatsapp_otp']: raise ValueError()
+        if payload.get('amr') not in (['pwd','whatsapp_otp'],['pwd','sms_otp']): raise ValueError()
         user = db.get(User,int(payload['sub']))
-        if not user: raise ValueError()
+        if not user or not user.active or payload.get('ver',0)!=user.session_version: raise ValueError()
         return user
     except (jwt.InvalidTokenError, ValueError, KeyError):
         raise HTTPException(401,'Please sign in again')

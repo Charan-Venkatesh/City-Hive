@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 import secrets
-from sqlalchemy import String, ForeignKey, Numeric, Date, DateTime, UniqueConstraint, CheckConstraint, Text, Boolean
+from sqlalchemy import String, ForeignKey, Numeric, Date, DateTime, UniqueConstraint, CheckConstraint, Text, Boolean, JSON, LargeBinary
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -15,6 +15,8 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(default=False)
     phone: Mapped[str | None] = mapped_column(String(18),nullable=True)
     phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean,default=True,server_default='1')
+    session_version: Mapped[int] = mapped_column(default=0,server_default='0')
 class Branch(Base):
     __tablename__ = 'branches'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -23,6 +25,7 @@ class Branch(Base):
     contact_phone: Mapped[str] = mapped_column(String(30), default='')
     contact_email: Mapped[str] = mapped_column(String(254), default='', server_default='')
     image_url: Mapped[str] = mapped_column(String(1000), default='', server_default='')
+    faqs: Mapped[list] = mapped_column(JSON,default=list,server_default='[]')
     description: Mapped[str] = mapped_column(Text, default='')
     facilities: Mapped[str] = mapped_column(Text, default='')
     rules: Mapped[str] = mapped_column(Text, default='')
@@ -47,6 +50,7 @@ class Admission(Base):
     move_in_date: Mapped[date] = mapped_column(Date)
     message: Mapped[str] = mapped_column(Text,default='')
     submission_key: Mapped[str] = mapped_column(String(64))
+    whatsapp_updates: Mapped[bool] = mapped_column(Boolean,default=False,server_default='0')
     status: Mapped[str] = mapped_column(String(20),default='pending',index=True)
     admin_note: Mapped[str] = mapped_column(Text,default='')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
@@ -71,6 +75,7 @@ class Room(Base):
     floor: Mapped[str] = mapped_column(String(30))
     capacity: Mapped[int]
     monthly_fee: Mapped[Decimal] = mapped_column(Numeric(12,2))
+    active: Mapped[bool] = mapped_column(Boolean,default=True,server_default='1')
 class FeePlan(Base):
     __tablename__ = 'fee_plans'
     __table_args__ = (
@@ -82,6 +87,7 @@ class FeePlan(Base):
     branch_id: Mapped[int] = mapped_column(ForeignKey('branches.id'),index=True)
     name: Mapped[str] = mapped_column(String(100))
     sharing: Mapped[int]
+    advance_amount: Mapped[Decimal] = mapped_column(Numeric(12,2),default=0,server_default='0')
     monthly_fee: Mapped[Decimal] = mapped_column(Numeric(12,2))
     additional_charge_label: Mapped[str] = mapped_column(String(100),default='')
     additional_charge_amount: Mapped[Decimal] = mapped_column(Numeric(12,2),default=0)
@@ -230,6 +236,7 @@ class OtpChallenge(Base):
     challenge_id: Mapped[str] = mapped_column(String(36),unique=True,index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id',ondelete='CASCADE'),index=True)
     purpose: Mapped[str] = mapped_column(String(20),default='login')
+    channel: Mapped[str] = mapped_column(String(16),default='whatsapp',server_default='whatsapp')
     phone: Mapped[str] = mapped_column(String(18))
     code_hash: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
@@ -355,3 +362,23 @@ class Outbox(Base):
     delivery_status: Mapped[str] = mapped_column(String(20),default='queued',server_default='queued')
     provider_message_id: Mapped[str | None] = mapped_column(String(100),nullable=True)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True),nullable=True)
+
+class LifecycleEvent(Base):
+    __tablename__ = 'lifecycle_events'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity: Mapped[str] = mapped_column(String(20))
+    entity_id: Mapped[int]
+    branch_id: Mapped[int] = mapped_column(ForeignKey('branches.id'),index=True)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    action: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
+
+class IdentityDocument(Base):
+    __tablename__ = 'identity_documents'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resident_id: Mapped[int] = mapped_column(ForeignKey('residents.id'),unique=True)
+    content_type: Mapped[str] = mapped_column(String(40))
+    encrypted_content: Mapped[bytes] = mapped_column(LargeBinary)
+    uploaded_by: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)

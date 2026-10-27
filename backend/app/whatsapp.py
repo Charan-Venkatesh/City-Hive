@@ -85,3 +85,7 @@ def test_deliveries():
 def clear_test_deliveries():
     with _lock:
         _test_deliveries.clear()
+
+
+def send_admission_update(phone,admission_id,status):
+    return _send_template(phone,settings.whatsapp_admission_template_name,[str(admission_id),status],"utility")

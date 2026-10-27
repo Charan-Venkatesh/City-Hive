@@ -1,0 +1,11 @@
+{
+  "command": "python -m app.serve",
+  "build_path": ".",
+  "stack": "python_3_12",
+  "env_variables": {
+    "APP_ENVIRONMENT": "production",
+    "AUTO_MIGRATE": "false",
+    "JOBS_ENABLED": "false"
+  },
+  "memory": 512
+}

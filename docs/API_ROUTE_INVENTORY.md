@@ -1,6 +1,6 @@
 # Cityhive API route inventory
 
-Generated from the current FastAPI route registration on 2026-10-21. This is a source inventory, not evidence of browser or production execution. Public auth endpoints use password/challenge checks; the job endpoint requires its private header; webhook callbacks require signature verification.
+Generated from FastAPI registration on 2026-10-22. This is a source inventory, not production execution evidence. Enquiry lookup requires email plus a private tracking key. Auth endpoints use password/OTP checks; the internal job endpoint uses its private header and webhook callbacks require signature verification.
 
 | Method | Path | Handler | Access boundary |
 |---|---|---|---|
@@ -82,3 +82,14 @@ Generated from the current FastAPI route registration on 2026-10-21. This is a s
 | PUT | /api/discounts/{discount_id}/revoke | revoke_discount | staff with branch scope |
 | GET | /api/notifications/whatsapp/webhook | verify_whatsapp_webhook | public or endpoint-specific verification |
 | POST | /api/notifications/whatsapp/webhook | whatsapp_delivery_webhook | public or endpoint-specific verification |
+| PUT | /api/branches/{branch_id}/faqs | branch_faqs | owner |
+| POST | /api/public/admissions/status | admission_status | public or endpoint-specific verification |
+| PUT | /api/rooms/{room_id}/status | room_status | staff with branch scope |
+| DELETE | /api/rooms/{room_id} | decommission_room | staff with branch scope |
+| PUT | /api/residents/{resident_id}/status | resident_status | staff with branch scope |
+| GET | /api/lifecycle-history | lifecycle_history | staff with branch scope |
+| GET | /api/residents/{resident_id}/identity-document | document_info | authenticated account with endpoint ownership checks |
+| PUT | /api/residents/{resident_id}/identity-document | upload_document | authenticated account with endpoint ownership checks |
+| GET | /api/residents/{resident_id}/identity-document/download | download_document | authenticated account with endpoint ownership checks |
+| DELETE | /api/residents/{resident_id}/identity-document | delete_document | authenticated account with endpoint ownership checks |
+| GET | /api/settlements/{settlement_id}/pdf | settlement_pdf | authenticated account with endpoint ownership checks |

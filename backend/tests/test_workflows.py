@@ -6,7 +6,7 @@ import pytest
 from datetime import date, timedelta
 from uuid import uuid4
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, func
+from sqlalchemy import create_engine, select, func, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -28,8 +28,17 @@ def ctx(monkeypatch):
     if url!='sqlite://' and not (make_url(url).database or '').endswith('_test'):
         raise RuntimeError('TEST_DATABASE_URL must name a disposable database ending in _test')
     opts={'connect_args':{'check_same_thread':False},'poolclass':StaticPool} if url=='sqlite://' else {}
+    schema=None
+    if make_url(url).get_backend_name()=='postgresql':
+        # A unique test schema avoids destructive changes to migrated tables,
+        # including dormant historical tables not mapped by current models.
+        schema='cityhive_test_'+uuid4().hex
+        bootstrap=create_engine(url)
+        with bootstrap.begin() as connection: connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        bootstrap.dispose()
+        opts={'connect_args':{'options':f'-csearch_path={schema}'}}
     engine=create_engine(url,**opts)
-    Base.metadata.drop_all(engine)
+    if schema is None: Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     sessions=sessionmaker(engine,expire_on_commit=False)
     with sessions() as db:
@@ -42,6 +51,10 @@ def ctx(monkeypatch):
     owner=login_with_otp(c,'owner@example.com','TestOwner123!')
     yield c,{'Authorization':'Bearer '+owner['access_token']},sessions
     app.dependency_overrides.clear(); engine.dispose()
+    if schema:
+        cleanup=create_engine(url)
+        with cleanup.begin() as connection: connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+        cleanup.dispose()
 def resident(c,h,email='resident@example.com'):
     r=c.post('/api/residents',headers=h,json={'name':'Test Resident','email':email,'phone':'9000000000','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!','aadhaar_last4':'1234'})
     assert r.status_code==201,r.text
@@ -456,7 +469,7 @@ def test_public_admission_is_idempotent_reviewable_and_enrollable(ctx):
     r=c.post('/api/rooms',headers=h,json={'branch_id':branch,'number':'101','floor':'Ground','capacity':2,'monthly_fee':'8500'})
     assert r.status_code==201
     availability=c.get(f'/api/public/branches/{branch}/availability')
-    assert availability.json()==[{'sharing':2,'monthly_fee':'8500.00','additional_charge_label':'','additional_charge_amount':'0.00','available_beds':2}]
+    assert availability.json()==[{'sharing':2,'monthly_fee':'8500.00','advance_amount':'0.00','additional_charge_label':'','additional_charge_amount':'0.00','available_beds':2}]
     payload={'branch_id':branch,'name':'Applicant Example','email':'applicant@example.com','phone':'9222222222','emergency_contact':'Emergency Example','emergency_phone':'9333333333','preferred_sharing':2,'move_in_date':local_today().isoformat(),'message':'Please contact me','submission_key':uuid4().hex}
     submitted=c.post('/api/admissions',json=payload)
     assert submitted.status_code==201,submitted.text
@@ -596,7 +609,7 @@ def test_effective_fee_plans_preserve_invoice_snapshots_and_scope(ctx,monkeypatc
     plan=created.json()
     assert c.post('/api/fee-plans',headers=h,json=plan_payload).status_code==409
     assert c.get(f'/api/public/branches/{branch_a}/availability').json()[0]=={
-        'sharing':2,'monthly_fee':'10000.00','additional_charge_label':'Laundry','additional_charge_amount':'350.00','available_beds':1}
+        'sharing':2,'monthly_fee':'10000.00','advance_amount':'0.00','additional_charge_label':'Laundry','additional_charge_amount':'350.00','available_beds':1}
     assert c.post('/api/billing/generate',headers=h,json={'month':month.isoformat()}).json()['created']==1
     invoice=c.get('/api/invoices',headers=h).json()[0]
     assert invoice['fee_plan_id']==plan['id'] and invoice['base_fee']=='10000.00'

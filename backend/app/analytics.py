@@ -34,7 +34,7 @@ def datetime_end(day: date):
 def financial_report(db: Session, user: User, start: date, end: date,
                      as_of: date | None = None, branch_id: int | None = None,
                      room_number: str | None = None, resident_id: int | None = None,
-                     payment_method: str | None = None):
+                     payment_method: str | None = None, invoice_status: str | None = None):
     if start > end:
         raise HTTPException(422, "from_date must be on or before to_date")
     if (end - start).days > 1095:
@@ -43,6 +43,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
     if payment_method not in {None, "cash", "upi", "bank"}:
         raise HTTPException(422, "Unsupported payment method")
 
+    if invoice_status not in {None,'paid','due','overdue'}: raise HTTPException(422,'Unsupported invoice status')
     query = (select(Invoice, Resident)
              .join(Resident, Resident.id == Invoice.resident_id)
              .where(Invoice.month >= start.replace(day=1),
@@ -88,10 +89,14 @@ def financial_report(db: Session, user: User, start: date, end: date,
     cash_by_staff: dict[int, Decimal] = defaultdict(lambda: ZERO)
     invoice_rows = []
 
+    matched_ids=[]
     for invoice, resident in rows:
         all_payments = payments_by_invoice[invoice.id]
         paid = sum((Decimal(p.amount) for p in all_payments), ZERO)
         balance = max(ZERO, Decimal(invoice.amount) - paid)
+        status='paid' if balance<=0 else 'overdue' if invoice.due_on<as_of else 'due'
+        if invoice_status and invoice_status!=status: continue
+        matched_ids.append(invoice.id)
         billed += Decimal(invoice.amount)
         settlement_date = None
         cumulative = ZERO
@@ -172,6 +177,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
     # Collections are transaction-date based and include payments made in the
     # period even when the related invoice belongs to an earlier billing month.
     payment_scope=(Payment.paid_at >= datetime_start(start), Payment.paid_at < datetime_end(end),Payment.reversed_at.is_(None))
+    if invoice_status: payment_scope=(*payment_scope,Invoice.id.in_(matched_ids))
     payment_count_query=(select(func.count(Payment.id)).join(Invoice,Invoice.id==Payment.invoice_id)
                          .join(Resident,Resident.id==Invoice.resident_id).where(*payment_scope))
     if branch_id is not None:
@@ -223,11 +229,12 @@ def financial_report(db: Session, user: User, start: date, end: date,
     if resident_id is not None: today_query=today_query.where(Resident.id==resident_id)
     if room_number: today_query=today_query.where(Invoice.room_number==room_number.strip())
     if payment_method: today_query=today_query.where(Payment.method==payment_method)
+    if invoice_status: today_query=today_query.where(Invoice.id.in_(matched_ids))
     collected_today=Decimal(db.scalar(today_query) or ZERO)
 
     # Include current residents with no invoices in the selected period, so
     # their lack of history is represented with null delay metrics, not zero.
-    if not room_number:
+    if not room_number and not invoice_status:
         resident_query=select(Resident)
         if branch_id is not None: resident_query=resident_query.where(Resident.branch_id==branch_id)
         if resident_id is not None: resident_query=resident_query.where(Resident.id==resident_id)
@@ -282,7 +289,7 @@ def financial_report(db: Session, user: User, start: date, end: date,
 
     return {"from_date": start.isoformat(), "to_date": end.isoformat(), "as_of": as_of.isoformat(),
         "definitions": {"invoice_scope": "Billing month is within selected months; both endpoints are inclusive.",
-            "collections": "Payment records dated within selected dates; filtered by method only when selected.",
+            "collections": ("Payments on invoices matching the selected billing months and status, within the selected payment dates." if invoice_status else "Payment records dated within selected dates; filtered by method only when selected."),
             "collected_today": "Non-reversed payments dated today in Asia/Kolkata, honoring branch, room, resident, and payment-method filters, independent of the selected collection date range.",
             "outstanding": "Selected invoices' balances using all non-reversed payment records as of report date.",
             "settlement_delay": "max(0, full settlement date minus invoice due date), fully settled selected invoices only."},

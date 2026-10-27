@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     otp_max_attempts: int = Field(default=5, ge=1, le=10)
     otp_resend_seconds: int = Field(default=60, ge=30, le=300)
     percentage_discounts_enabled: bool = False
+    automatic_billing_enabled: bool = False
+    identity_document_key: str = ''
+    sms_enabled: bool = False
+    twilio_account_sid: str = ''
+    twilio_auth_token: str = ''
+    twilio_from_number: str = ''
+    whatsapp_admission_template_name: str = ''
     whatsapp_enabled: bool = False
     whatsapp_provider: str = 'cloud'
     whatsapp_phone_number_id: str = ''
@@ -40,6 +47,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
     def validate_runtime(self):
+        if self.identity_document_key:
+            from cryptography.fernet import Fernet
+            try: Fernet(self.identity_document_key.encode())
+            except Exception: raise RuntimeError('IDENTITY_DOCUMENT_KEY must be a Fernet key') from None
         if len(self.jwt_secret)<32 or len(self.admin_password)<10:
             raise RuntimeError('JWT_SECRET needs 32+ characters; ADMIN_PASSWORD needs 10+')
         if self.smtp_security not in {'none', 'starttls', 'ssl'}:

@@ -1,4 +1,29 @@
-# Validation — chronological audit record (latest update 2026-10-21)
+# Validation — chronological audit record (latest update 2026-10-24)
+
+## Latest validation — persistent local setup, 2026-10-24
+
+The user selected completion of the local setup. A dedicated `cityhive-local` Compose stack now runs the built Nginx frontend, FastAPI, PostgreSQL 16 and Mailpit. Both images built, migration `0015_gap_completion` applied, and all four services are healthy. Published ports bind only to `127.0.0.1`; the database has no host port. See [local setup and sign-in instructions](docs/LOCAL_SETUP.md).
+
+Six focused local-delivery tests passed (one existing upstream deprecation warning), including refusal of production/external transports, password validation, OTP privacy/single use and inbox failure. The eight frontend tests and both normal/local builds passed. Browser owner sign-in using a Mailpit OTP succeeded; worker status is `ok` and document encryption is configured. The reverse proxy passed JSON health and 2 MB/7 MB request-boundary checks after increasing Nginx's limit to accommodate the application's 5 MB uploads.
+
+The start/stop scripts were exercised. A full restart preserved the owner record/password hash and every private configuration value; the browser session remained valid. Services are left running for the user. No real provider delivery or production deployment is claimed. Screenshot: `docs/visual-qa/local-setup-2026-10-24.jpg`.
+
+## Latest validation — PDF gap completion, 2026-10-22
+
+This section supersedes the older snapshots below. See [all 38 PDF items mapped to current behavior](docs/GAP_COMPLETION_2026-10-22.md) and [targeted browser/PDF acceptance](docs/visual-qa/GAP_ACCEPTANCE_2026-10-22.md).
+
+| Check | Actual result |
+|---|---|
+| SQLite backend | `TEST_DATABASE_URL=sqlite:// .venv/Scripts/python.exe -m pytest -q`: **47 passed**; one upstream Starlette/AnyIO deprecation warning. |
+| PostgreSQL 16 migration | Disposable Docker database migrated through `0015_gap_completion` successfully. |
+| PostgreSQL workflow/release/gap suite | `pytest tests/test_workflows.py tests/test_release.py tests/test_gaps.py -xq`: **43 passed**, one upstream warning, 77.15 seconds. Each workflow fixture uses an isolated generated schema. |
+| Frontend tests | `npm test`: **8 passed**. |
+| Frontend production build | `npm run build`: passed, Vite 6.4.1, 1,586 modules. The archive has no Git metadata, so revision metadata is unavailable. |
+| Backend container | Python 3.12 image built with locked dependencies; non-root API container started against the disposable PostgreSQL instance with `AUTO_MIGRATE=false`; health returned `{"status":"ok"}` and build returned `cityhive-api`. |
+| Browser | Synthetic owner OTP sign-in, dashboard, fee plans/inline validation, invoice generation/payment dialog, analytics filter, lifecycle and identity controls inspected. Desktop and mobile screenshots saved. |
+| PDFs | Invoice and settlement PNG renders inspected; automated logo/text/multipage regression passed. |
+
+No live provider credentials were used or messages sent. Genuine property photos and live SMS/WhatsApp/email configuration remain operator inputs. Production hosting, full Compose/recovery/concurrency testing and the live Slate/backend connection remain unverified. The earlier production-readiness limitations are not erased by local test success.
 
 ## Latest validation — integration/release work, 2026-10-21
 

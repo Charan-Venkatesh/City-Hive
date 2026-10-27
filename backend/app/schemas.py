@@ -7,6 +7,7 @@ Money = Decimal
 class Login(BaseModel):
     email: str = Field(max_length=254)
     password: str = Field(min_length=1, max_length=128)
+    channel: Literal['whatsapp','sms'] = 'whatsapp'
 class OtpVerify(BaseModel):
     challenge_id: str = Field(min_length=36,max_length=36)
     code: str = Field(pattern=r'^\d{6}$')
@@ -32,9 +33,10 @@ class FeePlanCreate(BaseModel):
     branch_id: int = Field(gt=0)
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')
     sharing: int = Field(ge=1,le=8)
+    advance_amount: Money = Field(default=Decimal("0"),ge=0,le=10000000,decimal_places=2)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
     additional_charge_label: str = Field(default='',max_length=100)
-    additional_charge_amount: Money = Field(default=0,ge=0,le=1000000,decimal_places=2)
+    additional_charge_amount: Money = Field(default=Decimal("0"),ge=0,le=1000000,decimal_places=2)
     billing_day: int = Field(default=1,ge=1,le=28)
     due_day: int = Field(default=5,ge=1,le=28)
     effective_from: date
@@ -48,9 +50,10 @@ class FeePlanCreate(BaseModel):
         return self
 class FeePlanUpdate(BaseModel):
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')
+    advance_amount: Money = Field(default=Decimal("0"),ge=0,le=10000000,decimal_places=2)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
     additional_charge_label: str = Field(default='',max_length=100)
-    additional_charge_amount: Money = Field(default=0,ge=0,le=1000000,decimal_places=2)
+    additional_charge_amount: Money = Field(default=Decimal("0"),ge=0,le=1000000,decimal_places=2)
     billing_day: int = Field(ge=1,le=28)
     due_day: int = Field(ge=1,le=28)
     effective_until: date | None = None
@@ -104,12 +107,17 @@ class ComplaintUpdate(BaseModel):
     resolution_note: str = Field(default='',max_length=1000)
 class ComplaintAssignment(BaseModel):
     user_id: int | None = Field(default=None,gt=0)
+class FAQEntry(BaseModel):
+    question: str = Field(min_length=3,max_length=200,pattern=r'\S')
+    answer: str = Field(min_length=3,max_length=2000,pattern=r'\S')
+
 class BranchCreate(BaseModel):
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')
     address: str = Field(default='',max_length=300)
     contact_phone: str = Field(default='',max_length=30)
     contact_email: EmailStr | Literal[''] = ''
     image_url: str = Field(default='',max_length=1000)
+    faqs: list[FAQEntry] = Field(default_factory=list,max_length=20)
     description: str = Field(default='',max_length=2000)
     facilities: str = Field(default='',max_length=2000)
     rules: str = Field(default='',max_length=3000)
@@ -140,6 +148,15 @@ class AdmissionCreate(BaseModel):
     move_in_date: date
     message: str = Field(default='',max_length=2000)
     submission_key: str = Field(min_length=32,max_length=64,pattern=r'^[a-fA-F0-9-]+$')
+    whatsapp_updates: bool = False
+
+class AdmissionLookup(BaseModel):
+    email: EmailStr
+    submission_key: str = Field(min_length=32,max_length=64)
+
+class LifecycleChange(BaseModel):
+    active: bool
+    reason: str = Field(min_length=5,max_length=500,pattern=r'\S')
 class AdmissionDecision(BaseModel):
     status: Literal['needs_info','approved','rejected']
     note: str = Field(default='',max_length=2000)

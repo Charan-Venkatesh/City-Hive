@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import {Skeleton} from './GapFeatures';
 
 export function useDialogFocus(open, busy, close) {
   const current = useRef({busy, close}); current.current = {busy, close};
@@ -28,7 +29,7 @@ function useRecords(path, api) {
   useEffect(() => {let live = true; setData(null); setError(''); api(path).then(v => {if(live) setData(v)}).catch(e => {if(live) setError(e.message)}); return () => {live = false}}, [path, version]);
   return {data, error, reload: () => setVersion(v => v + 1)};
 }
-function Pending({error, reload}) {return error ? <div role="alert"><p>{error}</p><button className="secondary" onClick={reload}>Try again</button></div> : <p role="status">Loading records…</p>}
+function Pending({error, reload}) {return error ? <div role="alert"><p>{error}</p><button className="secondary" onClick={reload}>Try again</button></div> : <Skeleton/>}
 
 export function Notifications({api}) {
   const {data, error, reload} = useRecords('/my/notifications', api);
@@ -44,8 +45,9 @@ export function DeploymentPanel({api}) {
   const {data, error, reload} = useRecords('/deployment-status', api);
   return <section className="card"><div className="card-heading"><div><h2>Service configuration</h2><p>Configuration status is separate from verified delivery. Confirm the most recent successful worker run.</p></div><button className="secondary" onClick={reload}>Refresh</button></div>{!data ? <Pending error={error} reload={reload}/> : <dl className="service-grid">{[
     ['Release', data.release], ['Environment', data.environment], ['Database engine', data.database_engine], ['Schema', `${data.schema_revision} / expected ${data.expected_revision}`],
-    ['WhatsApp', data.whatsapp.status==='ready' ? 'Configured; live delivery still requires provider verification' : 'Configuration incomplete'], ['Email', `${data.smtp.configured ? 'Host configured' : 'Local or missing host'} · ${data.smtp.security}`],
+    ['WhatsApp', data.whatsapp.status==='test_only' ? 'Local test provider; no real phone delivery' : data.whatsapp.status==='ready' ? 'Configured; live delivery still requires provider verification' : 'Configuration incomplete'], ['Email', `${data.smtp.configured ? 'Host configured' : 'Local or missing host'} · ${data.smtp.security}`],
     ['Worker', `${data.scheduler.status} · ${data.scheduler.mode.replaceAll('_',' ')}`], ['Last completed run', data.scheduler.last_succeeded_at ? new Date(data.scheduler.last_succeeded_at).toLocaleString('en-IN') : 'No successful run recorded'],
+    ['SMS verification',data.sms_configured?'Configured':'Not configured'],['Private identity storage',data.identity_documents_configured?'Configured':'Not configured'],['Scheduled billing',data.automatic_billing_enabled?'Enabled':'Disabled'],
     ['Percentage discounts', data.percentage_discounts_enabled ? 'Enabled for staff approval' : 'Disabled by management configuration'],
   ].map(([key,value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>}</section>;
 }

@@ -37,7 +37,7 @@ def test_populated_legacy_schema_is_backfilled_and_upgrade_is_idempotent(tmp_pat
         room=c.execute(text('SELECT branch_id FROM rooms WHERE id=1')).scalar_one()
         resident=c.execute(text('SELECT branch_id FROM residents WHERE id=1')).scalar_one()
         assert room==resident
-        assert c.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='0014_release_completion'
+        assert c.execute(text('SELECT version_num FROM alembic_version')).scalar_one()=='0015_gap_completion'
         assert c.execute(text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='admissions'")).scalar_one()==1
         assert c.execute(text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='complaint_events'")).scalar_one()==1
         assert c.execute(text('SELECT resident_code FROM residents WHERE id=1')).scalar_one().startswith('CH-')

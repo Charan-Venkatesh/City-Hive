@@ -16,3 +16,10 @@
 *.sqlite-*
 *.log
 .DS_Store
+
+/tmp/
+/.local/
+.local/
+e2e/node_modules/
+e2e/test-results/
+backend/.e2e/

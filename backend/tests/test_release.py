@@ -168,7 +168,7 @@ def test_operational_status_worker_and_scheduler_authorization(ctx,monkeypatch):
     status=c.get('/api/deployment-status',headers=h)
     assert status.status_code==200 and status.json()['scheduler']['status']=='ok'
     assert settings.job_runner_token not in status.text and settings.jwt_secret not in status.text
-    assert status.json()['expected_revision']=='0014_release_completion'
+    assert status.json()['expected_revision']=='0015_gap_completion'
     with sessions() as db: assert db.get(JobState,'reminders-and-moveouts').last_succeeded_at
     def fail(): raise ValueError('do not expose this secret')
     monkeypatch.setattr(main,'job_tick',fail)

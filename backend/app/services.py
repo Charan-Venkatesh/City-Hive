@@ -8,34 +8,18 @@ import smtplib
 import ssl
 import textwrap
 from sqlalchemy import select, func
-from .models import Invoice, Payment, Resident, User, Branch, Outbox, now
+from .models import Invoice, Payment, Resident, User, Branch, Outbox, Admission, now
 from .config import settings
 from .db import SessionLocal
 from . import whatsapp
 
 def invoice_pdf(invoice,resident,branch,paid,balance):
-    lines=[
-        "CITYHIVE LUXURY PG'S AND CO-SPACE",
-        f'Invoice: {invoice.invoice_number}',
-        f'Issued: {invoice.issued_on}    Due: {invoice.due_on}',
-        f'Branch: {branch.name}',
-        f'Address: {branch.address or "Not configured"}',
-        f'Resident: {resident.name}    Resident ID: {resident.resident_code}',
-        f'Room: {invoice.room_number}    Billing period: {invoice.month:%B %Y}',
-        '',
-        'Description                                      Amount (INR)',
-        f'Monthly accommodation fee                      {invoice.base_fee:>12.2f}',
-        *(([f'{invoice.additional_charge_label or "Additional configured charge"}   {invoice.additional_charge_amount:>12.2f}']) if invoice.additional_charge_amount else []),
-        f'Discount                                         {-invoice.discount:>12.2f}',
-        '-'*63,
-        f'Total due                                       {invoice.amount:>12.2f}',
-        f'Paid                                            {paid:>12.2f}',
-        f'Balance                                         {balance:>12.2f}',
-        '',
-        'This bill records configured accommodation charges and payments.',
-        'No tax or statutory registration claim is made by this document.',
-    ]
-    return document_pdf(lines)
+    from .documents import financial_document
+    return financial_document('Invoice',invoice.invoice_number,
+        [('Issued',invoice.issued_on),('Due',invoice.due_on),('Branch',branch.name),('Address',branch.address),
+         ('Resident',resident.name),('Resident ID',resident.resident_code),('Room',invoice.room_number),('Billing period',invoice.month.strftime('%B %Y'))],
+        [('Accommodation',invoice.base_fee),*(([(invoice.additional_charge_label,invoice.additional_charge_amount)]) if invoice.additional_charge_amount else []),
+         ('Discount',-invoice.discount),('Total',invoice.amount),('Paid',paid),('Balance',balance)])
 
 def document_pdf(lines):
     lines=[part for line in lines for part in (textwrap.wrap(str(line),width=83,replace_whitespace=False) or [''])]
@@ -128,7 +112,12 @@ def deliver_emails():
                              'Please contact management to pay.\n')
             item.attempts += 1
             try:
-                if item.channel=='whatsapp':
+                if item.channel=='whatsapp' and item.dedupe_key.startswith('admission-wa:'):
+                    admission=db.get(Admission,int(item.dedupe_key.split(':')[1]))
+                    if not admission or not admission.whatsapp_updates or admission.phone!=item.recipient:
+                        item.cancelled=True;item.delivery_status='cancelled';continue
+                    item.provider_message_id=whatsapp.send_admission_update(item.recipient,admission.id,item.dedupe_key.split(':')[2])
+                elif item.channel=='whatsapp':
                     invoice=db.get(Invoice,int(item.dedupe_key.split(':')[1]))
                     resident=db.get(Resident,invoice.resident_id)
                     item.provider_message_id=whatsapp.send_reminder(item.recipient,invoice.invoice_number,invoice.month.strftime('%B %Y'),f'{balance:.2f}',invoice.due_on.isoformat())
@@ -155,12 +144,13 @@ def deliver_emails():
 
 
 def receipt_pdf(db,payment):
+    from .documents import financial_document
     invoice=db.get(Invoice,payment.invoice_id)
     resident=db.get(Resident,invoice.resident_id)
     branch=db.get(Branch,invoice.branch_id)
-    lines=receipt_text(db,payment).splitlines()
-    lines[1:1]=[f'Branch: {branch.name if branch else "Historical branch"}',
-                f'Resident reference: {resident.resident_code}',f'Invoice: {invoice.invoice_number}']
-    lines.extend([f'Current invoice balance: INR {invoice.amount-paid_total(db,invoice.id):.2f}',
-                  'Status: REVERSED' if payment.reversed_at else 'Status: PAYMENT RECORDED'])
-    return document_pdf(lines)
+    balance=invoice.amount-paid_total(db,invoice.id)
+    return financial_document('Payment receipt',f'SW-{payment.id:06d}',
+        [('Branch',branch.name if branch else 'Historical branch'),('Resident',resident.name),('Resident ID',resident.resident_code),
+         ('Invoice',invoice.invoice_number),('Received',payment.paid_at),('Method',payment.method),('Reference',payment.reference),
+         ('Status','REVERSED' if payment.reversed_at else 'PAYMENT RECORDED'),('Current invoice balance',f'INR {balance:.2f}')],
+        [('Payment recorded',payment.amount),('Current invoice balance',balance)])
