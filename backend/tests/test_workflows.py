@@ -777,3 +777,14 @@ def test_complaint_assignment_and_history_are_branch_scoped(ctx):
     assert resident_view['history'][1]['new_assignee_user_id'] is None
     assert c.get('/api/complaints',headers=resident_b_headers).json()[0]['id']==complaint_b
     assert c.put(f'/api/complaints/{complaint.json()["id"]}/assignment',headers=resident_a_headers,json={'user_id':staff_a_id}).status_code==403
+
+
+def test_password_only_login_when_otp_not_required(ctx,monkeypatch):
+    c,h,sessions=ctx
+    monkeypatch.setattr(settings,'otp_required',False)
+    bad=c.post('/api/auth/login',json={'email':'owner@example.com','password':'wrong-password'})
+    assert bad.status_code==401
+    ok=c.post('/api/auth/login',json={'email':'owner@example.com','password':'TestOwner123!'})
+    assert ok.status_code==200 and ok.json()['access_token']
+    me=c.get('/api/auth/me',headers={'Authorization':'Bearer '+ok.json()['access_token']})
+    assert me.status_code==200

@@ -364,6 +364,9 @@ def login(data: Login, request: Request, db: Session = Depends(get_db)):
     consume(db,'login',request.client.host if request.client else 'unknown',10,60)
     user = db.scalar(select(User).where(User.email==data.email.strip().lower()))
     if not user or not user.active or not hashing.verify(data.password,user.password_hash): raise HTTPException(401,'Incorrect email or password')
+    if not settings.otp_required:
+        audit_auth(db,user.id,'password_login',request); db.commit()
+        return {'access_token':token_for(user),'token_type':'bearer'}
     phone=user.phone
     if user.role=='resident':
         resident=db.scalar(select(Resident).where(Resident.user_id==user.id))

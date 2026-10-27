@@ -12,12 +12,14 @@ bearer = HTTPBearer(auto_error=False)
 def token_for(user,mfa_verified=False,channel="whatsapp"):
     claims={'sub':str(user.id),'exp':datetime.now(timezone.utc)+timedelta(hours=8),'ver':user.session_version or 0}
     if mfa_verified: claims['amr']=['pwd',channel+'_otp']
+    elif not settings.otp_required: claims['amr']=['pwd']
     return jwt.encode(claims,settings.jwt_secret,algorithm='HS256')
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: Session = Depends(get_db)):
     try:
         if not credentials: raise ValueError()
         payload = jwt.decode(credentials.credentials,settings.jwt_secret,algorithms=['HS256'])
-        if payload.get('amr') not in (['pwd','whatsapp_otp'],['pwd','sms_otp']): raise ValueError()
+        allowed=[['pwd','whatsapp_otp'],['pwd','sms_otp']]+([] if settings.otp_required else [['pwd']])
+        if payload.get('amr') not in allowed: raise ValueError()
         user = db.get(User,int(payload['sub']))
         if not user or not user.active or payload.get('ver',0)!=user.session_version: raise ValueError()
         return user

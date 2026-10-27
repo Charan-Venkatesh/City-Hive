@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     otp_expiry_seconds: int = Field(default=300, ge=60, le=900)
     otp_max_attempts: int = Field(default=5, ge=1, le=10)
     otp_resend_seconds: int = Field(default=60, ge=30, le=300)
+    otp_required: bool = True
     percentage_discounts_enabled: bool = False
     automatic_billing_enabled: bool = False
     identity_document_key: str = ''

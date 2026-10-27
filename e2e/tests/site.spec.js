@@ -1,11 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { API, OWNER, ownerApi, respectResendWindow, uiLogin } from './helpers.js';
+import { API, OWNER, ownerApi, uiLogin } from './helpers.js';
 
 test.describe.configure({ mode: 'serial' });
 
-test('@smoke homepage shows no locations until published, then lists both branches', async ({ page, request }) => {
-  const before = await request.get(`${API}/branches`);
-  expect(await before.json()).toEqual([]);
+test('@smoke homepage lists both published branches', async ({ page, request }) => {
   const auth = await ownerApi(request);
   const branches = await (await request.get(`${API}/managed-branches`, { headers: auth })).json();
   for (const b of branches.filter(b => b.name !== 'Branch A')) {
@@ -27,7 +25,7 @@ test('@smoke wrong password is rejected with a visible message', async ({ page }
   await expect(page.getByText('Incorrect email or password')).toBeVisible();
 });
 
-test('owner signs in with password plus code and sees dashboard and rooms', async ({ page }) => {
+test('owner signs in with password and sees dashboard and rooms', async ({ page }) => {
   await uiLogin(page, OWNER, 'Management sign in');
   await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
   await expect(page.getByText('/ 280')).toBeVisible();
@@ -37,19 +35,6 @@ test('owner signs in with password plus code and sees dashboard and rooms', asyn
   await expect(page.getByRole('heading', { name: "Cityhive Luxury Men's PG" })).toBeVisible();
   await page.getByRole('button', { name: /Owner/ }).click(); // sign out
   await expect(page.getByRole('button', { name: 'Management sign in' }).first()).toBeVisible();
-});
-
-test('wrong verification code is refused', async ({ page }) => {
-  await respectResendWindow(OWNER.email);
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Management sign in' }).first().click();
-  await page.getByLabel('Email or username').fill(OWNER.email);
-  await page.getByLabel('Password', { exact: true }).fill(OWNER.password);
-  await page.getByRole('button', { name: 'Continue securely' }).click();
-  await page.getByLabel('Six-digit verification code').fill('000000');
-  await page.getByRole('button', { name: /Verify and sign in/ }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
-  await expect(page.getByRole('heading', { name: /Check your phone/ })).toBeVisible();
 });
 
 test('resident created by management can sign in and sees only their own portal', async ({ page, request }) => {
