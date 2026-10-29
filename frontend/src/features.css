@@ -5,3 +5,7 @@
 .shell .ledger-filters input,.shell .ledger-filters select{width:100%;min-width:0}
 .shell .ledger-filters>button{flex:0 0 auto;margin-bottom:4px}
 @media(max-width:480px){.shell .ledger-filters{padding:16px}.shell .ledger-filters .field{flex-basis:100%}.ch-tracking{padding:24px}}
+.insight-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0}
+.insight-metrics>div{padding:14px;border:1px solid var(--line,#e3e6ee);border-radius:10px}
+.insight-metrics small{display:block;color:var(--muted,#667)}.insight-metrics strong{display:block;font-size:22px}.insight-metrics em{font-size:12px;font-style:normal;color:var(--muted,#667)}
+.insight-title{margin:22px 0 8px}.field.compact{min-width:220px}
