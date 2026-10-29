@@ -1,0 +1,35 @@
+name: Cityhive scheduled jobs
+
+# Calls the backend's job endpoint: queues fee reminders, sends queued emails, and (when
+# AUTOMATIC_BILLING_ENABLED=true on the backend) issues monthly invoices.
+# Needs two repository secrets: JOB_RUNNER_URL (e.g. https://your-app.catalyst.example) and JOB_RUNNER_TOKEN.
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cityhive-jobs
+  cancel-in-progress: false
+
+jobs:
+  run-jobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run backend jobs
+        env:
+          JOB_RUNNER_URL: ${{ secrets.JOB_RUNNER_URL }}
+          JOB_RUNNER_TOKEN: ${{ secrets.JOB_RUNNER_TOKEN }}
+        run: |
+          if [ -z "$JOB_RUNNER_URL" ] || [ -z "$JOB_RUNNER_TOKEN" ]; then
+            echo "JOB_RUNNER_URL / JOB_RUNNER_TOKEN secrets are not set; nothing to do."
+            exit 0
+          fi
+          curl --fail --silent --show-error --max-time 120 --retry 2 --retry-delay 10 \
+            -X POST "${JOB_RUNNER_URL%/}/api/internal/jobs/run" \
+            -H "X-Cityhive-Job-Token: $JOB_RUNNER_TOKEN"
+          echo

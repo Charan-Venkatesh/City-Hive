@@ -45,7 +45,15 @@ Import the repo, **Root Directory = `frontend`** (settings come from `frontend/v
 
 It is applied at build time, so redeploy after changing it. Then put the resulting Vercel origin into the backend `CORS_ORIGINS` and restart AppSail.
 
-## 4. Scheduler
+## 4. Scheduler (GitHub Actions)
+`.github/workflows/scheduled-jobs.yml` calls the job endpoint every 30 minutes. In the GitHub repo open Settings → Secrets and variables → Actions and add:
+
+- `JOB_RUNNER_URL` — the AppSail address, e.g. `https://<appsail-url>` (no `/api`)
+- `JOB_RUNNER_TOKEN` — the same value as the backend's `JOB_RUNNER_TOKEN` (32+ random characters)
+
+Run it once from the Actions tab ("Run workflow") to confirm it succeeds. Scheduled runs can be delayed by a few minutes, and GitHub pauses schedules after 60 days without repository activity. The manual alternative is below.
+
+### Manual alternative
 AppSail may sleep, so reminders/automatic billing run from an external scheduler (Catalyst Cron, GitHub Actions or cron-job.org) every 15–60 min:
 
 ```sh
