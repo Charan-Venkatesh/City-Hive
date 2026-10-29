@@ -93,6 +93,7 @@ def queue_reminders(db, branch_ids=None):
 
 def deliver_emails():
     # SMTP delivery is at-least-once: crash after SMTP acceptance can duplicate an email.
+    sent=failed=0
     with SessionLocal() as db:
         pending = db.scalars(select(Outbox).where(Outbox.sent_at.is_(None),Outbox.cancelled.is_(False),Outbox.attempts<5,
             (Outbox.next_attempt_at.is_(None)) | (Outbox.next_attempt_at<=now())).order_by(Outbox.id).limit(50).with_for_update(skip_locked=True)).all()
@@ -135,12 +136,15 @@ def deliver_emails():
                 item.sent_at = now()
                 item.delivery_status='submitted'
                 item.last_error = ''
+                sent+=1
             except Exception as exc:
+                failed+=1
                 item.last_error = 'SMTP delivery failed; automatic retry pending'
                 item.delivery_status='retrying' if item.attempts<5 else 'failed'
                 item.next_attempt_at=now()+timedelta(minutes=min(60,2**item.attempts))
                 if item.channel=='whatsapp': item.last_error='WhatsApp delivery unavailable or failed; check provider configuration'
         db.commit()
+    return {'sent':sent,'failed':failed}
 
 
 def receipt_pdf(db,payment):

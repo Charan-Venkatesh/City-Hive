@@ -212,3 +212,8 @@ class DiscountCreate(BaseModel):
         if self.effective_from.day!=1 or self.effective_until.day!=1:
             raise ValueError('Discount dates identify billing months; use the first day of the month')
         return self
+
+class ManualEmail(BaseModel):
+    to: EmailStr
+    subject: str = Field(min_length=1,max_length=200,pattern=r'\S')
+    body: str = Field(min_length=1,max_length=5000,pattern=r'\S')

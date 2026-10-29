@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import Base, engine, SessionLocal, get_db
 from .models import User, Branch, BranchAdmin, Admission, AdmissionEvent, Room, FeePlan, Resident, Invoice, Payment, PaymentAuditEvent, Complaint, ComplaintEvent, GatePass, FinancialLedgerEvent, FinalSettlement, SettlementEvent, Outbox, AllocationEvent, StayRequest, IdentityReviewEvent, OtpChallenge, AuthAuditEvent, NotificationPreferenceEvent, now
-from .schemas import Login, OtpVerify, OtpResend, NotificationPreference, PaymentReversal, PasswordChange, RoomCreate, RoomUpdate, FeePlanCreate, FeePlanUpdate, ResidentFeePlanUpdate, ResidentCreate, Allocation, IDReview, BillingRun, PaymentCreate, ComplaintCreate, ComplaintUpdate, ComplaintAssignment, FinancialLedgerCreate, SettlementCreate, SettlementDecision, SettlementRefund, BranchCreate, BranchUpdate, BranchAdminCreate, AdmissionCreate, AdmissionDecision, AdmissionEnroll, StayRequestCreate, StayRequestDecision, GatePassCreate
+from .schemas import Login, OtpVerify, OtpResend, NotificationPreference, PaymentReversal, PasswordChange, RoomCreate, RoomUpdate, ManualEmail, FeePlanCreate, FeePlanUpdate, ResidentFeePlanUpdate, ResidentCreate, Allocation, IDReview, BillingRun, PaymentCreate, ComplaintCreate, ComplaintUpdate, ComplaintAssignment, FinancialLedgerCreate, SettlementCreate, SettlementDecision, SettlementRefund, BranchCreate, BranchUpdate, BranchAdminCreate, AdmissionCreate, AdmissionDecision, AdmissionEnroll, StayRequestCreate, StayRequestDecision, GatePassCreate
 from .security import hashing, token_for, current_user, active_user, admin, staff, is_owner, is_staff
 from .services import paid_total, receipt_text, receipt_pdf, invoice_pdf, queue_reminders, deliver_emails, local_today
 from .analytics import financial_report
@@ -1031,6 +1031,19 @@ def receipt(payment_id: int,db: Session = Depends(get_db),user: User = Depends(a
 def remind(db: Session = Depends(get_db),user: User = Depends(staff)):
     count=queue_reminders(db,branch_scope(db,user)); db.commit()
     return {'queued':count}
+@app.post('/api/emails/send')
+def send_manual_email(data: ManualEmail,db: Session = Depends(get_db),user: User = Depends(admin)):
+    """Owner-only simple sender: queues one message in the outbox and delivers it immediately."""
+    item=Outbox(user_id=user.id,dedupe_key='manual:'+uuid4().hex,recipient=str(data.to).lower(),subject=data.subject.strip(),body=data.body)
+    db.add(item); db.commit(); item_id=item.id
+    result=deliver_emails()
+    db.expire_all(); item=db.get(Outbox,item_id)
+    return {'id':item_id,'status':item.delivery_status,'delivered':item.sent_at is not None,**result}
+@app.post('/api/emails/send-now')
+def send_pending_now(db: Session = Depends(get_db),user: User = Depends(admin)):
+    """Owner-only trigger: queue due reminders, then deliver everything pending without waiting for the scheduler."""
+    queued=queue_reminders(db,branch_scope(db,user)); db.commit()
+    return {'queued':queued,**deliver_emails()}
 @app.get('/api/emails')
 def emails(db: Session = Depends(get_db),user: User = Depends(staff)):
     query=select(Outbox).order_by(Outbox.id.desc()).limit(100)

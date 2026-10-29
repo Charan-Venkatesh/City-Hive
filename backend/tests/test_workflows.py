@@ -807,3 +807,22 @@ def test_rooms_list_occupants(ctx):
     assert c.put(f'/api/residents/{res}/allocation',headers=h,json={'room_id':rid,'discount':'0'}).status_code==200
     row=[x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]
     assert len(row['occupants'])==1 and row['occupied']==1
+
+
+def test_owner_can_send_manual_email_and_trigger_delivery(ctx,monkeypatch):
+    c,h,sessions=ctx
+    sent=[]
+    class FakeSMTP:
+        def __init__(self,*a,**k): pass
+        def __enter__(self): return self
+        def __exit__(self,*a): return False
+        def starttls(self,**k): pass
+        def login(self,*a): pass
+        def send_message(self,msg): sent.append(msg['To'])
+    from app import services
+    monkeypatch.setattr(services,'SessionLocal',sessions)
+    monkeypatch.setattr('app.services.smtplib.SMTP',FakeSMTP)
+    r=c.post('/api/emails/send',headers=h,json={'to':'someone@example.com','subject':'Hello','body':'Test body'})
+    assert r.status_code==200 and r.json()['delivered'] is True and sent==['someone@example.com']
+    assert c.post('/api/emails/send-now',headers=h).json()['failed']==0
+    assert c.post('/api/emails/send',headers=h,json={'to':'bad','subject':'x','body':'y'}).status_code==422
