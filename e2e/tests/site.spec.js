@@ -30,7 +30,7 @@ test('owner signs in with password and sees dashboard and rooms', async ({ page 
   await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
   await expect(page.getByText('/ 280')).toBeVisible();
   await page.getByRole('button', { name: /^Rooms/ }).click();
-  await expect(page.getByText(/M-101-AC/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Room M-101-AC' })).toBeVisible();
   await page.getByRole('button', { name: /^Branches/ }).click();
   await expect(page.getByRole('heading', { name: "Cityhive Luxury Men's PG" })).toBeVisible();
   await page.getByRole('button', { name: /Owner/ }).click(); // sign out
