@@ -799,3 +799,11 @@ def test_rooms_carry_ac_flag(ctx):
     assert rooms['AC-1']['ac'] is True and rooms['N-1']['ac'] is False
     assert c.put(f"/api/rooms/{rooms['N-1']['id']}",headers=h,json={'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000','ac':True}).status_code==200
     assert {x['number']:x for x in c.get('/api/rooms',headers=h).json()}['N-1']['ac'] is True
+
+
+def test_rooms_list_occupants(ctx):
+    c,h,sessions=ctx
+    rid=room(c,h,capacity=2); res=resident(c,h)
+    assert c.put(f'/api/residents/{res}/allocation',headers=h,json={'room_id':rid,'discount':'0'}).status_code==200
+    row=[x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]
+    assert len(row['occupants'])==1 and row['occupied']==1

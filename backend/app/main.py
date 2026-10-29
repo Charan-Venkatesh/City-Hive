@@ -514,7 +514,10 @@ def rooms_data(db,user=None):
         scope=branch_scope(db,user)
         if scope is not None: query=query.where(Room.branch_id.in_(scope))
     rooms = db.scalars(query).all()
-    return [{'id':r.id,'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),'ac':r.ac,
+    names={}
+    for res in db.scalars(select(Resident).where(Resident.status=='active',Resident.room_id.is_not(None)).order_by(Resident.name)):
+        names.setdefault(res.room_id,[]).append({'id':res.id,'name':res.name,'resident_code':res.resident_code,'phone':res.phone})
+    return [{'id':r.id,'occupants':names.get(r.id,[]),'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),'ac':r.ac,
              'occupied':db.scalar(select(func.count(Resident.id)).where(Resident.room_id==r.id,Resident.status=='active'))} for r in rooms]
 @app.get('/api/rooms')
 def rooms(db: Session = Depends(get_db), user: User = Depends(staff)):
@@ -1154,7 +1157,7 @@ def my_available_rooms(db: Session = Depends(get_db),user: User = Depends(active
     for room in db.scalars(select(Room).where(Room.branch_id==resident.branch_id,Room.active.is_(True)).order_by(Room.number)):
         occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id,Resident.status=='active')) or 0
         if occupied<room.capacity and room.id!=resident.room_id:
-            result.append({'id':room.id,'number':room.number,'capacity':room.capacity,'monthly_fee':str(room.monthly_fee),'available_beds':room.capacity-occupied})
+            result.append({'id':room.id,'number':room.number,'capacity':room.capacity,'ac':room.ac,'monthly_fee':str(room.monthly_fee),'available_beds':room.capacity-occupied})
     return result
 @app.get('/api/stay-requests')
 def stay_requests(db: Session = Depends(get_db),user: User = Depends(staff)):
