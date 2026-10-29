@@ -55,7 +55,46 @@ def main(user, password):
         else: continue                                                                 # pending
         c.post('/payments', json={'invoice_id': inv['id'], 'amount': str(amount), 'method': ['cash', 'upi', 'bank'][i % 3],
                                   'idempotency_key': 'demo-' + uuid.uuid4().hex[:12], 'note': 'Demo payment'})
-    print('Done. Demo resident password: Demo@12345')
+    seed_admissions(c, branches)
+    seed_complaints(c)
+    print('Done. Demo resident password: Demo@12345 (Demo@12345! once changed at first sign-in)')
+
+
+APPLICANTS = [('Aman Kapoor', 2, 2, 'pending'), ('Bharat Reddy', 2, 1, 'approved'), ('Chirag Shah', 3, 3, 'pending'),
+              ('Dinesh Pillai', 3, 4, 'rejected'), ('Eshan Malhotra', 2, 4, 'needs_info'), ('Farhan Ali', 3, 2, 'pending')]
+
+def seed_admissions(c, branches):
+    ids = [b['id'] for b in branches]
+    existing = {a['email'] for a in c.get('/admissions').json()}
+    for n, (name, branch_idx, sharing, status) in enumerate(APPLICANTS, start=1):
+        email = f'applicant{n:02d}@example.com'
+        if email in existing: continue
+        r = c.post('/admissions', json={'branch_id': ids[(branch_idx - 2) % len(ids)], 'name': name, 'email': email,
+                   'phone': f'91111{n:05d}', 'preferred_sharing': sharing, 'move_in_date': '2026-11-%02d' % (n + 2),
+                   'submission_key': str(uuid.uuid4()), 'message': 'Demo enquiry'})
+        if status != 'pending' and r.status_code in (200, 201):
+            c.put(f"/admissions/{r.json()['id']}", json={'status': status, 'note': 'Demo review'})
+
+COMPLAINTS = [('maintenance', 'Water leakage in bathroom', 'Tap is leaking continuously.'),
+              ('food', 'Dinner quality', 'Dinner was cold on two days this week.'),
+              ('cleaning', 'Corridor cleaning', 'Corridor on this floor is not cleaned daily.'),
+              ('other', 'Wi-Fi is slow', 'Wi-Fi speed drops after 9 PM.')]
+
+def seed_complaints(c):
+    staff = dict(c.headers)
+    if c.get('/complaints').json(): return
+    for n in range(3, 7):
+        email = f'demo{n:02d}@example.com'
+        cl = httpx.Client(base_url=API, timeout=30)
+        r = cl.post('/auth/login', json={'email': email, 'password': 'Demo@12345'})
+        if 'access_token' not in r.json(): continue
+        cl.headers['Authorization'] = 'Bearer ' + r.json()['access_token']
+        cl.post('/auth/password', json={'current_password': 'Demo@12345', 'new_password': 'Demo@12345!'})
+        category, title, text = COMPLAINTS[n - 3]
+        cl.post('/complaints', json={'category': category, 'title': title, 'description': text})
+    for i, comp in enumerate(c.get('/complaints').json()):
+        if i == 1: c.put(f"/complaints/{comp['id']}", json={'status': 'in_progress', 'response': 'We are looking into it.'})
+        if i == 2: c.put(f"/complaints/{comp['id']}", json={'status': 'resolved', 'response': 'Fixed.', 'resolution_note': 'Resolved by housekeeping.'})
 
 if __name__ == '__main__':
     main(*sys.argv[1:3])
