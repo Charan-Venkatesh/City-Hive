@@ -24,11 +24,13 @@ class RoomCreate(BaseModel):
     floor: str = Field(min_length=1,max_length=30)
     capacity: int = Field(ge=1,le=8)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
+    ac: bool = False
 class RoomUpdate(BaseModel):
     number: str = Field(min_length=1,max_length=30,pattern=r'\S')
     floor: str = Field(min_length=1,max_length=30)
     capacity: int = Field(ge=1,le=8)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
+    ac: bool = False
 class FeePlanCreate(BaseModel):
     branch_id: int = Field(gt=0)
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')

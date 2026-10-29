@@ -788,3 +788,14 @@ def test_password_only_login_when_otp_not_required(ctx,monkeypatch):
     assert ok.status_code==200 and ok.json()['access_token']
     me=c.get('/api/auth/me',headers={'Authorization':'Bearer '+ok.json()['access_token']})
     assert me.status_code==200
+
+
+def test_rooms_carry_ac_flag(ctx):
+    c,h,sessions=ctx
+    r=c.post('/api/rooms',headers=h,json={'number':'AC-1','floor':'1','capacity':2,'monthly_fee':'5000','ac':True})
+    assert r.status_code==201
+    r2=c.post('/api/rooms',headers=h,json={'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000'})
+    rooms={x['number']:x for x in c.get('/api/rooms',headers=h).json()}
+    assert rooms['AC-1']['ac'] is True and rooms['N-1']['ac'] is False
+    assert c.put(f"/api/rooms/{rooms['N-1']['id']}",headers=h,json={'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000','ac':True}).status_code==200
+    assert {x['number']:x for x in c.get('/api/rooms',headers=h).json()}['N-1']['ac'] is True

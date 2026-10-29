@@ -42,7 +42,7 @@ def test_http_startup_migrations_and_restart_persistence(tmp_path):
             assert json.load(result)['release']=='disposable-runtime-test'
         with urlopen(f'http://127.0.0.1:{port}/api/branches') as result: assert json.load(result)==[]
         with sqlite3.connect(database) as db:
-            assert db.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0015_gap_completion'
+            assert db.execute('SELECT version_num FROM alembic_version').fetchone()[0]=='0016_room_ac'
             before=db.execute('SELECT id,email,password_hash FROM users').fetchall()
             db.execute("UPDATE branches SET description='Disposable persistence marker' WHERE id=1");db.commit()
     finally: process.terminate();process.wait(timeout=10)

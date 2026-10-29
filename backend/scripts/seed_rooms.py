@@ -31,8 +31,9 @@ def main():
                     fee = FEES.get((sharing, ac), Decimal('0'))
                     if room:
                         if (sharing, ac) in FEES: room.monthly_fee = fee
+                        room.ac = ac
                         continue
-                    db.add(Room(branch_id=branch.id, number=number, floor=f'Floor {floor}', capacity=sharing, monthly_fee=fee))
+                    db.add(Room(branch_id=branch.id, number=number, floor=f'Floor {floor}', capacity=sharing, monthly_fee=fee, ac=ac))
                     created += 1
         db.commit()
     print(f'Rooms created: {created}')

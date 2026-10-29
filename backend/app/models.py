@@ -76,6 +76,7 @@ class Room(Base):
     capacity: Mapped[int]
     monthly_fee: Mapped[Decimal] = mapped_column(Numeric(12,2))
     active: Mapped[bool] = mapped_column(Boolean,default=True,server_default='1')
+    ac: Mapped[bool] = mapped_column(Boolean,default=False,server_default='0')
 class FeePlan(Base):
     __tablename__ = 'fee_plans'
     __table_args__ = (

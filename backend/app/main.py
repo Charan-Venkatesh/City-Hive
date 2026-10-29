@@ -514,7 +514,7 @@ def rooms_data(db,user=None):
         scope=branch_scope(db,user)
         if scope is not None: query=query.where(Room.branch_id.in_(scope))
     rooms = db.scalars(query).all()
-    return [{'id':r.id,'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),
+    return [{'id':r.id,'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),'ac':r.ac,
              'occupied':db.scalar(select(func.count(Resident.id)).where(Resident.room_id==r.id,Resident.status=='active'))} for r in rooms]
 @app.get('/api/rooms')
 def rooms(db: Session = Depends(get_db), user: User = Depends(staff)):
@@ -543,6 +543,7 @@ def update_room(room_id: int,data: RoomUpdate,db: Session = Depends(get_db),user
     occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id,Resident.status=='active')) or 0
     if data.capacity<occupied: raise HTTPException(409,'Capacity cannot be set below current occupancy')
     room.number,room.floor,room.capacity,room.monthly_fee=data.number.strip(),data.floor.strip(),data.capacity,data.monthly_fee
+    room.ac=data.ac
     db.commit()
     return {'message':'Room updated'}
 def fee_plan_data(plan):
