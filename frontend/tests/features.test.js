@@ -18,3 +18,21 @@ test('performance sorting compares amounts numerically and retains missing delay
   assert.deepEqual(sortPerformance(rows,'average_settlement_delay_days','asc').map(r=>r.resident_name),['C','B','A']);
   assert.deepEqual(rows.map(r=>r.resident_name),['A','B','C']);
 });
+
+import {filterResidents,filterComplaints,filterAdmissions,activeFilters} from '../src/features.js';
+test('resident filters combine and date ranges are inclusive',()=>{
+  const rows=[{name:'A',branch_id:1,status:'active',room_id:5,joined_on:'2026-09-01'},{name:'B',branch_id:2,status:'active',room_id:null,joined_on:'2026-10-01'},{name:'C',branch_id:1,status:'inactive',room_id:null,joined_on:'2026-10-15'}];
+  assert.deepEqual(filterResidents(rows,{branch:'1'}).map(r=>r.name),['A','C']);
+  assert.deepEqual(filterResidents(rows,{branch:'1',allocation:'unallocated'}).map(r=>r.name),['C']);
+  assert.deepEqual(filterResidents(rows,{from:'2026-09-01',to:'2026-10-01'}).map(r=>r.name),['A','B']);
+  assert.deepEqual(filterResidents(rows,{status:'inactive',search:'c'}).map(r=>r.name),['C']);
+});
+test('complaint and admission filters',()=>{
+  const c=[{id:1,title:'Leak',category:'maintenance',status:'open',created_at:'2026-10-02T10:00:00Z'},{id:2,title:'Meal',category:'food',status:'resolved',created_at:'2026-10-09T10:00:00Z'}];
+  assert.deepEqual(filterComplaints(c,{category:'food'}).map(x=>x.id),[2]);
+  assert.deepEqual(filterComplaints(c,{from:'2026-10-02',to:'2026-10-02'}).map(x=>x.id),[1]);
+  const a=[{id:1,name:'Zed',status:'pending',branch_id:3,move_in_date:'2026-11-01'}];
+  assert.equal(filterAdmissions(a,{status:'approved'}).length,0);
+  assert.equal(filterAdmissions(a,{search:'zed',branch:'3'}).length,1);
+  assert.deepEqual(activeFilters({status:'open',x:''},[{key:'status',label:'Status'},{key:'x',label:'X'}]),[{key:'status',label:'Status',value:'open'}]);
+});
