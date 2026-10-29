@@ -36,3 +36,18 @@ test('complaint and admission filters',()=>{
   assert.equal(filterAdmissions(a,{search:'zed',branch:'3'}).length,1);
   assert.deepEqual(activeFilters({status:'open',x:''},[{key:'status',label:'Status'},{key:'x',label:'X'}]),[{key:'status',label:'Status',value:'open'}]);
 });
+
+import {filterGatePasses,filterMessages,filterRooms} from '../src/features.js';
+test('gate pass, message and room filters',()=>{
+  const g=[{resident_name:'Asha',room_number:'M-1',status:'active',valid_until:'2026-11-01'},{resident_name:'Ben',room_number:'M-2',status:'revoked',valid_until:'2026-12-01'}];
+  assert.deepEqual(filterGatePasses(g,{status:'revoked'}).map(x=>x.resident_name),['Ben']);
+  assert.equal(filterGatePasses(g,{from:'2026-11-15'}).length,1);
+  const m=[{subject:'Due',recipient:'a@x.com',channel:'email',sent_at:'2026-10-01T00:00:00Z'},{subject:'Hi',recipient:'b@x.com',channel:'whatsapp',cancelled:true}];
+  assert.deepEqual(filterMessages(m,{status:'cancelled'}).map(x=>x.subject),['Hi']);
+  assert.deepEqual(filterMessages(m,{channel:'email',search:'due'}).map(x=>x.subject),['Due']);
+  const r=[{branch_id:1,ac:true,capacity:2,occupied:2,active:true},{branch_id:1,ac:false,capacity:4,occupied:0,active:true},{branch_id:2,ac:true,capacity:2,occupied:1,active:false}];
+  assert.equal(filterRooms(r,{occupancy:'full'}).length,1);
+  assert.equal(filterRooms(r,{occupancy:'empty',type:'non'}).length,1);
+  assert.equal(filterRooms(r,{occupancy:'available'}).length,2);
+  assert.equal(filterRooms(r,{status:'inactive',sharing:'2'}).length,1);
+});

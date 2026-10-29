@@ -39,3 +39,16 @@ export function activeFilters(values,fields) {
   return fields.filter(f=>values[f.key]).map(f=>({key:f.key,label:f.label,
     value:f.options?(f.options.find(o=>String(o.value)===String(values[f.key]))?.label??values[f.key]):values[f.key]}));
 }
+
+export function filterGatePasses(rows,{search='',status='',from='',to=''}={}) {
+  return rows.filter(p=>hit(search,text(p.resident_name,p.resident_code,p.room_number))&&(!status||p.status===status)&&inRange(p.valid_until,from,to));
+}
+export function filterMessages(rows,{search='',channel='',status='',from='',to=''}={}) {
+  const state=e=>e.delivery_status||(e.cancelled?'cancelled':e.sent_at?'sent':'queued');
+  return rows.filter(e=>hit(search,text(e.subject,e.recipient))&&(!channel||(e.channel||'email')===channel)&&(!status||state(e)===status)&&inRange(e.created_at||e.sent_at,from,to));
+}
+export function filterRooms(rows,{branch='',type='',sharing='',occupancy='',status=''}={}) {
+  return rows.filter(r=>(!branch||String(r.branch_id)===String(branch))&&(!type||(type==='ac')===Boolean(r.ac))
+    &&(!sharing||String(r.capacity)===String(sharing))&&(!status||(status==='active')===Boolean(r.active))
+    &&(!occupancy||(occupancy==='empty'?r.occupied===0:occupancy==='full'?r.occupied>=r.capacity:r.occupied<r.capacity)));
+}
