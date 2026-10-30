@@ -136,7 +136,7 @@ class BranchUpdate(BranchCreate):
     active: bool = True
 class BranchAdminCreate(BaseModel):
     email: EmailStr
-    phone: str = Field(pattern=r'^(\d{10}|\+\d{10,15})$')
+    phone: str = Field(default='',pattern=r'^(\d{10}|\+\d{10,15})?$')
     temporary_password: str = Field(min_length=12,max_length=128)
     branch_ids: list[int] = Field(min_length=1,max_length=20)
 class AdmissionCreate(BaseModel):

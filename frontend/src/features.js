@@ -27,12 +27,12 @@ export function filterResidents(rows,{search='',branch='',status='',allocation='
 }
 export function filterComplaints(rows,{search='',branch='',status='',category='',from='',to=''}={}) {
   return rows.filter(c=>hit(search,text(c.title,c.description,c.resident_name,c.category,c.id))
-    &&(!branch||String(c.branch_id)===String(branch))&&(!status||c.status===status)
+    &&(!branch||String(c.branch_id)===String(branch))&&(!status||(status==='open'?c.status!=='resolved':c.status===status))
     &&(!category||c.category===category)&&inRange(c.created_at,from,to));
 }
 export function filterAdmissions(rows,{search='',branch='',status='',from='',to=''}={}) {
   return rows.filter(a=>hit(search,text(a.name,a.email,a.phone,a.message,a.id))
-    &&(!branch||String(a.branch_id)===String(branch))&&(!status||a.status===status)&&inRange(a.move_in_date,from,to));
+    &&(!branch||String(a.branch_id)===String(branch))&&(!status||(status==='open'?['pending','needs_info'].includes(a.status):a.status===status))&&inRange(a.move_in_date,from,to));
 }
 // Active filters as {key,label,value} so the UI can show removable chips.
 export function activeFilters(values,fields) {

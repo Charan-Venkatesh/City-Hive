@@ -215,9 +215,10 @@ def settlement_pdf(settlement_id: int,db: Session=Depends(get_db),user=Depends(a
          ('Actual refund recorded',Decimal(data['refunded']))])
     return Response(content,media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename="CH-SET-{item.id:06d}.pdf"','Cache-Control':'no-store'})
 
-def operational_kpis(db,user):
+def operational_kpis(db,user,branch_id=None):
     if not is_staff(user): return {}
     m=core();scope=m.branch_scope(db,user);today=local_today()
+    if branch_id is not None: scope=[branch_id]
     def count(model,*conditions):
         query=select(func.count(model.id)).where(*conditions)
         if scope is not None:
@@ -231,6 +232,6 @@ def operational_kpis(db,user):
     return {'pending_admissions':count(Admission,Admission.status.in_(['pending','needs_info'])),
         'pending_extensions':count(StayRequest,StayRequest.request_type=='extension',StayRequest.status=='pending'),
         'upcoming_moveouts':count(Resident,Resident.status=='active',Resident.planned_move_out>=today,Resident.planned_move_out<=today+timedelta(days=30)),
-        'overdue_invoice_count':sum(i['status']=='overdue' for i in m.invoices_data(db,user)),
+        'overdue_invoice_count':sum(i['status']=='overdue' and (branch_id is None or i['branch_id']==branch_id) for i in m.invoices_data(db,user)),
         'reminder_failures':count(Outbox,Outbox.dedupe_key.like('reminder:%'),Outbox.cancelled.is_(False),Outbox.sent_at.is_(None),Outbox.attempts>=5),
         'cash_collected':str(db.scalar(cash) or 0)}

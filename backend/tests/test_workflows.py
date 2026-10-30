@@ -826,3 +826,29 @@ def test_owner_can_send_manual_email_and_trigger_delivery(ctx,monkeypatch):
     assert r.status_code==200 and r.json()['delivered'] is True and sent==['someone@example.com']
     assert c.post('/api/emails/send-now',headers=h).json()['failed']==0
     assert c.post('/api/emails/send',headers=h,json={'to':'bad','subject':'x','body':'y'}).status_code==422
+
+
+def test_rooms_expose_plan_state_and_allocation_assigns_unique_plan(ctx):
+    c,h,sessions=ctx
+    rid=room(c,h,capacity=2); res=resident(c,h)
+    row=[x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]
+    assert row['plan_status']=='none' and row['plan'] is None and row['available']==2
+    with sessions() as db: bid=db.scalar(select(Branch.id))
+    p=c.post('/api/fee-plans',headers=h,json={'branch_id':bid,'name':'2 Sharing','sharing':2,'monthly_fee':'7000','advance_amount':'5000','effective_from':'2026-01-01'})
+    assert p.status_code==201
+    row=[x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]
+    assert row['plan_status']=='assigned' and row['plan']['monthly_fee']=='7000.00'
+    out=c.put(f'/api/residents/{res}/allocation',headers=h,json={'room_id':rid,'discount':'0'}).json()
+    assert out['fee_plan']['status']=='assigned' and out['fee_plan']['plan']['name']=='2 Sharing'
+    with sessions() as db: assert db.get(Resident,res).fee_plan_id==p.json()['id']
+
+
+def test_dashboard_branch_filter_and_optional_admin_phone(ctx,monkeypatch):
+    c,h,sessions=ctx
+    with sessions() as db: bid=db.scalar(select(Branch.id))
+    d=c.get(f'/api/dashboard?branch_id={bid}',headers=h).json()
+    assert 'occupancy_percent' in d and c.get('/api/dashboard?branch_id=9999',headers=h).status_code in (403,404)
+    body={'email':'warden@example.com','temporary_password':'Warden-Pass-123','branch_ids':[bid]}
+    assert c.post('/api/branch-admins',headers=h,json=body).status_code==422
+    monkeypatch.setattr(settings,'otp_required',False)
+    assert c.post('/api/branch-admins',headers=h,json=body).status_code==201

@@ -331,19 +331,20 @@ def update_branch_publication(branch_id: int,published: bool,db: Session = Depen
     return {'published':branch.published}
 @app.post('/api/branch-admins',status_code=201)
 def add_branch_admin(data: BranchAdminCreate,db: Session = Depends(get_db),user: User = Depends(admin)):
+    if settings.otp_required and not data.phone: raise HTTPException(422,'A mobile number is required while sign-in verification is enabled')
     ids=set(data.branch_ids)
     branches_found=set(db.scalars(select(Branch.id).where(Branch.id.in_(ids))))
     if ids!=branches_found: raise HTTPException(404,'One or more branches were not found')
     account=db.scalar(select(User).where(User.email==str(data.email).lower()))
     if account and account.role!='branch_admin': raise HTTPException(409,'That email is already used by another account type')
     if not account:
-        account=User(email=str(data.email).lower(),password_hash=hashing.hash(data.temporary_password),role='branch_admin',must_change_password=True,phone=data.phone)
+        account=User(email=str(data.email).lower(),password_hash=hashing.hash(data.temporary_password),role='branch_admin',must_change_password=True,phone=data.phone or None)
         db.add(account); db.flush()
-        db.add(AuthAuditEvent(user_id=account.id,actor_user_id=user.id,event='phone_assigned'))
+        if data.phone: db.add(AuthAuditEvent(user_id=account.id,actor_user_id=user.id,event='phone_assigned'))
     else:
         account.password_hash=hashing.hash(data.temporary_password)
         account.must_change_password=True
-        if account.phone!=data.phone:
+        if data.phone and account.phone!=data.phone:
             account.phone=data.phone; account.phone_verified_at=None
             db.add(AuthAuditEvent(user_id=account.id,actor_user_id=user.id,event='phone_assigned'))
     db.execute(BranchAdmin.__table__.delete().where(BranchAdmin.user_id==account.id))
@@ -476,7 +477,7 @@ def whatsapp_status(user: User=Depends(admin)):
     return whatsapp.status()
 @app.get('/api/auth/me')
 def me(user: User = Depends(current_user)):
-    return {'id':user.id,'email':user.email,'role':user.role,'must_change_password':user.must_change_password}
+    return {'id':user.id,'email':user.email,'role':user.role,'must_change_password':user.must_change_password,'otp_required':settings.otp_required}
 @app.get('/api/my/notification-preferences')
 def my_notification_preferences(db: Session=Depends(get_db),user: User=Depends(active_user)):
     if user.role!='resident': raise HTTPException(403,'Resident account required')
@@ -508,16 +509,35 @@ def resident_for(db,user):
     if not resident: raise HTTPException(404,'Resident record not found')
     return resident
 
+def names_count(names,room_id): return len(names.get(room_id,[]))
+def plans_for(db,branch_id,sharing,on):
+    """Active fee plans for a branch and sharing on a date. Overlaps are blocked on save, so more than one means bad data."""
+    return db.scalars(select(FeePlan).where(FeePlan.branch_id==branch_id,FeePlan.sharing==sharing,FeePlan.active.is_(True),
+        FeePlan.effective_from<=on,(FeePlan.effective_until.is_(None))|(FeePlan.effective_until>=on)).order_by(FeePlan.effective_from.desc(),FeePlan.id.desc())).all()
+def plan_state(db,branch_id,sharing,on,cache=None):
+    key=(branch_id,sharing)
+    if cache is not None and key in cache: return cache[key]
+    found=plans_for(db,branch_id,sharing,on)
+    if len(found)==1:
+        p=found[0]
+        result={'status':'assigned','plan':{'id':p.id,'name':p.name,'monthly_fee':str(p.monthly_fee),'advance_amount':str(p.advance_amount),
+            'additional_charge_label':p.additional_charge_label,'additional_charge_amount':str(p.additional_charge_amount)}}
+    else: result={'status':'none' if not found else 'multiple','plan':None}
+    if cache is not None: cache[key]=result
+    return result
+
 def rooms_data(db,user=None):
     query=select(Room).order_by(Room.number)
     if user is not None:
         scope=branch_scope(db,user)
         if scope is not None: query=query.where(Room.branch_id.in_(scope))
     rooms = db.scalars(query).all()
+    plan_cache={};today=local_today()
     names={}
     for res in db.scalars(select(Resident).where(Resident.status=='active',Resident.room_id.is_not(None)).order_by(Resident.name)):
         names.setdefault(res.room_id,[]).append({'id':res.id,'name':res.name,'resident_code':res.resident_code,'phone':res.phone})
-    return [{'id':r.id,'occupants':names.get(r.id,[]),'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),'ac':r.ac,
+    return [{'id':r.id,'occupants':names.get(r.id,[]),'active':r.active,'branch_id':r.branch_id,'number':r.number,'floor':r.floor,'capacity':r.capacity,'monthly_fee':str(r.monthly_fee),'ac':r.ac,'plan_status':plan_state(db,r.branch_id,r.capacity,today,plan_cache)['status'],'plan':plan_state(db,r.branch_id,r.capacity,today,plan_cache)['plan'],
+             'available':max(r.capacity-names_count(names,r.id),0),
              'occupied':db.scalar(select(func.count(Resident.id)).where(Resident.room_id==r.id,Resident.status=='active'))} for r in rooms]
 @app.get('/api/rooms')
 def rooms(db: Session = Depends(get_db), user: User = Depends(staff)):
@@ -862,8 +882,14 @@ def allocate(resident_id: int,data: Allocation,db: Session = Depends(get_db),use
     resident.room_id,resident.discount = room.id,data.discount
     if previous_room_id!=room.id:
         db.add(AllocationEvent(resident_id=resident.id,from_room_id=previous_room_id,to_room_id=room.id,actor_user_id=user.id,reason=data.reason))
+    # Assign the fee plan only when exactly one plan matches and the administrator has not chosen one.
+    fee_plan={'status':'kept' if resident.fee_plan_id else None}
+    if not resident.fee_plan_id:
+        state=plan_state(db,room.branch_id,room.capacity,local_today())
+        fee_plan={'status':state['status']}
+        if state['status']=='assigned': resident.fee_plan_id=state['plan']['id']; fee_plan['plan']=state['plan']
     db.commit()
-    return {'message':'Room allocated. Existing invoices remain unchanged.'}
+    return {'message':'Room allocated. Existing invoices remain unchanged.','fee_plan':fee_plan}
 @app.put('/api/residents/{resident_id}/id-review')
 def review(resident_id: int,data: IDReview,db: Session = Depends(get_db),user: User = Depends(staff)):
     resident = db.get(Resident,resident_id)
@@ -1213,14 +1239,20 @@ def process_moveouts(db: Session = Depends(get_db),user: User = Depends(staff)):
     count=process_due_moveouts(db,branch_scope(db,user));db.commit()
     return {'vacated':count}
 @app.get('/api/dashboard')
-def dashboard(db: Session = Depends(get_db),user: User = Depends(active_user)):
+def dashboard(branch_id: int | None = None,db: Session = Depends(get_db),user: User = Depends(active_user)):
+    if branch_id is not None:
+        if not is_staff(user): raise HTTPException(403,'Administrator access required')
+        require_branch(db,user,branch_id)
+        if not db.get(Branch,branch_id): raise HTTPException(404,'Branch not found')
     data=invoices_data(db,user)
+    if branch_id is not None: data=[i for i in data if i['branch_id']==branch_id]
     current=local_today().replace(day=1)
     current_invoices=[i for i in data if i['month']==current]
-    rooms=[r for r in rooms_data(db,user) if r['active']] if is_staff(user) else []
+    rooms=[r for r in rooms_data(db,user) if r['active'] and (branch_id is None or r['branch_id']==branch_id)] if is_staff(user) else []
     complaint_query=select(func.count(Complaint.id)).where(Complaint.status!='resolved')
     if is_staff(user):
         scope=branch_scope(db,user)
+        if branch_id is not None: scope=[branch_id]
         if scope is not None:
             complaint_query=complaint_query.join(Resident,Resident.id==Complaint.resident_id).where(Resident.branch_id.in_(scope))
             resident_count=db.scalar(select(func.count(Resident.id)).where(Resident.branch_id.in_(scope)))
@@ -1229,7 +1261,8 @@ def dashboard(db: Session = Depends(get_db),user: User = Depends(active_user)):
         complaint_query=complaint_query.where(Complaint.resident_id==resident_for(db,user).id)
         resident_count=1
     from .gap_features import operational_kpis
-    return {**operational_kpis(db,user), 'residents':resident_count,
+    return {**operational_kpis(db,user,branch_id), 'residents':resident_count,
+            'occupancy_percent':round(100*sum(r['occupied'] for r in rooms)/max(sum(r['capacity'] for r in rooms),1)),
             'beds':sum(r['capacity'] for r in rooms),'occupied':sum(r['occupied'] for r in rooms),
             'collected':str(sum((Decimal(i['paid']) for i in current_invoices),Decimal(0))),
             'outstanding':str(sum((Decimal(i['balance']) for i in data),Decimal(0))),

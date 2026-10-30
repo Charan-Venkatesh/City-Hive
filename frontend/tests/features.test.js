@@ -51,3 +51,10 @@ test('gate pass, message and room filters',()=>{
   assert.equal(filterRooms(r,{occupancy:'available'}).length,2);
   assert.equal(filterRooms(r,{status:'inactive',sharing:'2'}).length,1);
 });
+
+test('"open" shortcut filters match the dashboard cards',()=>{
+  const c=[{id:1,status:'open'},{id:2,status:'in_progress'},{id:3,status:'resolved'}];
+  assert.deepEqual(filterComplaints(c,{status:'open'}).map(x=>x.id),[1,2]);
+  const a=[{id:1,status:'pending'},{id:2,status:'needs_info'},{id:3,status:'approved'}];
+  assert.deepEqual(filterAdmissions(a,{status:'open'}).map(x=>x.id),[1,2]);
+});

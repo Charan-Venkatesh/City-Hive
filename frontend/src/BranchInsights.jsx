@@ -43,7 +43,7 @@ export default function BranchInsights({branches,rooms,invoices,month}){
       <tbody>{view.types.map(t=><tr key={`${t.sharing}-${t.ac}`}><td>{t.sharing}-person · {t.ac?'AC':'Non-AC'}</td><td>{t.rooms}</td><td>{t.beds}</td><td>{t.filled}</td><td>{money(t.billed)}</td><td>{money(t.collected)}</td></tr>)}</tbody></table></div>
     <h3 className="insight-title">Beds still to be filled ({view.beds-view.filled})</h3>
     <div className="table-scroll" tabIndex={0} role="region" aria-label="Rooms with vacant beds"><table><thead><tr><th>Room</th><th>Type</th><th>Floor</th><th>Filled</th><th>Vacant</th><th>Rate / bed</th></tr></thead>
-      <tbody>{view.vacancies.slice(0,40).map(r=><tr key={r.id}><td>{r.number}</td><td>{r.ac?'AC':'Non-AC'} · {r.capacity}-person</td><td>{r.floor}</td><td>{r.occupied}/{r.capacity}</td><td>{r.capacity-r.occupied}</td><td>{money(r.monthly_fee)}</td></tr>)}</tbody></table></div>
+      <tbody>{view.vacancies.slice(0,40).map(r=><tr key={r.id}><td>{r.number}</td><td>{r.ac?'AC':'Non-AC'} · {r.capacity}-person</td><td>{r.floor}</td><td>{r.occupied}/{r.capacity}</td><td>{r.capacity-r.occupied}</td><td>{r.plan?money(r.plan.monthly_fee):'Fee plan not assigned'}</td></tr>)}</tbody></table></div>
     {view.vacancies.length>40&&<p className="muted">Showing the 40 rooms with the fewest vacant beds; use Rooms for the full list.</p>}
     <h3 className="insight-title">Pending fee list</h3>
     {view.pendingRows.length?<div className="table-scroll" tabIndex={0} role="region" aria-label="Pending fees"><table><thead><tr><th>Resident</th><th>Room</th><th>Month</th><th>Due</th><th>Balance</th><th>Status</th></tr></thead>
