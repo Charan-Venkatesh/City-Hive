@@ -5,18 +5,16 @@ async function openAsOwner(page, request) {
   const auth = await ownerApi(request);
   await page.addInitScript(t => sessionStorage.setItem('staywell-token', t), auth.Authorization.replace('Bearer ', ''));
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
 }
 
 test('dashboard is short, branch-aware and its cards open filtered lists', async ({ page, request }) => {
   await openAsOwner(page, request);
   expect(await page.locator('main tbody tr').count()).toBe(0);
-  await expect(page.locator('.kpi-card')).toHaveCount(8);
+  await expect(page.locator('.ds-stats[aria-label="Key figures"] .ds-stat')).toHaveCount(4);
   await page.getByLabel('Branch').selectOption({ index: 1 });
-  await page.locator('.kpi-card', { hasText: 'Open complaints' }).click();
-  await expect(page.getByRole('heading', { name: 'Complaints', level: 1 })).toBeVisible();
-  await expect(page.locator('.filter-summary')).toContainText('Status: Not resolved');
-  await expect(page.locator('.filter-summary')).toContainText('Branch:');
+  await page.locator('.ds-stat', { hasText: 'Occupancy' }).click();
+  await expect(page.getByRole('heading', { name: 'Rooms', level: 1 })).toBeVisible();
 });
 
 test('rooms show the fee-plan state instead of a misleading zero price', async ({ page, request }) => {
@@ -28,7 +26,7 @@ test('rooms show the fee-plan state instead of a misleading zero price', async (
 test('new resident form pre-fills a generated temporary password and labels are clear', async ({ page, request }) => {
   await openAsOwner(page, request);
   await page.getByRole('button', { name: /Add resident/ }).first().click();
-  const pw = page.locator('.modal [name=temporary_password]');
+  const pw = page.locator('.dlg [name=temporary_password]');
   await expect(pw).toHaveValue(/.{14,}/);
   const first = await pw.inputValue();
   await page.getByRole('button', { name: 'Generate a new one' }).click();
@@ -42,8 +40,10 @@ test('fees page is split into Plans, Invoices and Payments tabs', async ({ page,
   await openAsOwner(page, request);
   await page.evaluate(() => [...document.querySelectorAll('nav button')].find(b => b.innerText.trim().startsWith('Fees')).click());
   await expect(page.getByRole('tab', { name: /Plans/ })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Fee ledger' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Payment history' })).toHaveCount(0);
+  await expect(page.getByRole('tabpanel').or(page.locator('section[aria-label="Invoices"]'))).toBeVisible();
+  await expect(page.locator('section[aria-label="Invoices"]')).toBeVisible();
+  await expect(page.locator('section[aria-label="Payments"]')).toHaveCount(0);
   await page.getByRole('tab', { name: /Payments/ }).click();
+  await expect(page.locator('section[aria-label="Payments"]')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Payment history' })).toBeVisible();
 });

@@ -7,7 +7,7 @@ const pages = ['Overview', 'Branches', 'Branch admins', 'Admissions', 'Stay requ
 
 async function overflow(page) {
   return page.evaluate(() => ({ doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    wide: [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 && !e.closest('.table-scroll'); })
+    wide: [...document.querySelectorAll('main *')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.right > innerWidth + 1 && !e.closest('.table-scroll, .ds-table-wrap'); })
       .slice(0, 3).map(e => e.tagName + '.' + e.className) }));
 }
 
@@ -23,7 +23,7 @@ test.describe('responsive layout', () => {
       await page.setViewportSize(size);
       await page.addInitScript(t => sessionStorage.setItem('staywell-token', t), token);
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
       const problems = [];
       for (const name of pages) {
         await page.evaluate(n => [...document.querySelectorAll('nav button')].find(b => b.innerText.trim().startsWith(n))?.click(), name);
@@ -57,15 +57,16 @@ test.describe('keyboard and accessibility', () => {
   test('every management table scroll region is keyboard focusable and inputs are labelled', async ({ page, request }) => {
     const auth = await ownerApi(request); const token = auth.Authorization.replace('Bearer ', '');
     await page.addInitScript(t => sessionStorage.setItem('staywell-token', t), token);
-    await page.goto('/'); await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
+    await page.goto('/'); await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
     const issues = [];
     for (const name of pages) {
       await page.evaluate(n => [...document.querySelectorAll('nav button')].find(b => b.innerText.trim().startsWith(n))?.click(), name);
       await page.waitForTimeout(300);
+      // (buttons inside a closed <details> menu are not rendered, so they are not counted)
       const r = await page.evaluate(() => ({
         regions: [...document.querySelectorAll('.table-scroll')].filter(e => e.tabIndex < 0 || !e.getAttribute('aria-label')).length,
         unlabelled: [...document.querySelectorAll('main input:not([type=hidden]), main select, main textarea')].filter(e => !e.labels?.length && !e.getAttribute('aria-label') && !e.closest('label')).length,
-        iconButtons: [...document.querySelectorAll('main button')].filter(b => !b.innerText.trim() && !b.getAttribute('aria-label') && !b.title).length }));
+        iconButtons: [...document.querySelectorAll('main button')].filter(b => !b.closest('details:not([open])') && !b.innerText.trim() && !b.getAttribute('aria-label') && !b.title).length }));
       if (r.regions || r.unlabelled || r.iconButtons) issues.push(`${name}: ${JSON.stringify(r)}`);
     }
     expect(issues, issues.join('\n')).toEqual([]);

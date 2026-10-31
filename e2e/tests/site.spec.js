@@ -6,7 +6,7 @@ test.describe.configure({ mode: 'serial' });
 test('@smoke homepage lists both published branches', async ({ page, request }) => {
   const auth = await ownerApi(request);
   const branches = await (await request.get(`${API}/managed-branches`, { headers: auth })).json();
-  for (const b of branches.filter(b => b.name !== 'Branch A')) {
+  for (const b of branches.filter(b => ['Cityhive Luxury Men\'s PG', 'CityHive CoSpace'].includes(b.name))) {
     const r = await request.put(`${API}/branches/${b.id}/publication?published=true`, { headers: auth });
     expect(r.ok(), await r.text()).toBeTruthy();
   }
@@ -25,10 +25,19 @@ test('@smoke wrong password is rejected with a visible message', async ({ page }
   await expect(page.getByText('Incorrect email or password')).toBeVisible();
 });
 
-test('owner signs in with password and sees dashboard and rooms', async ({ page }) => {
+test('owner signs in with password and sees dashboard and rooms', async ({ page, request }) => {
   await uiLogin(page, OWNER, 'Management sign in');
-  await expect(page.getByRole('heading', { name: /A little order/ })).toBeVisible();
-  await expect(page.getByText('/ 280')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Overview', level: 1 })).toBeVisible();
+  // Occupancy card must equal what the room and allocation records say. It was a hard-coded "/ 280" before, which
+  // broke whenever a room was added; deriving the expectation from /api/rooms keeps the rule it actually checks:
+  // dashboard capacity = sum of active room capacities, dashboard occupied = residents currently allocated.
+  const auth = await ownerApi(request);
+  const rooms = (await (await request.get(`${API}/rooms`, { headers: auth })).json()).filter(r => r.active);
+  const capacity = rooms.reduce((t, r) => t + r.capacity, 0), occupied = rooms.reduce((t, r) => t + r.occupied, 0);
+  const api = await (await request.get(`${API}/dashboard`, { headers: auth })).json();
+  expect([api.beds, api.occupied]).toEqual([capacity, occupied]);
+  expect(capacity).toBeGreaterThan(0);
+  await expect(page.locator('.ds-stat', { hasText: 'Occupancy' })).toContainText(`${occupied} / ${capacity}`);
   await page.getByRole('button', { name: /^Rooms/ }).click();
   await expect(page.getByRole('heading', { name: 'Room M-101-AC' })).toBeVisible();
   await page.getByRole('button', { name: /^Branches/ }).click();

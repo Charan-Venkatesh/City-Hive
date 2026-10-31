@@ -1,52 +1,78 @@
 import React from 'react';
+import PageHeader from './PageHeader';
+import StatCard from './StatCard';
+import ListRow from './ListRow';
+import StatusBadge from './StatusBadge';
+import FormField from './FormField';
+import {ErrorState} from './States';
+import {dashboardMetrics} from './features';
 
-const num = v => Number(v || 0);
+const longDate = () => new Date().toLocaleDateString('en-IN', {weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'});
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
-function Card({label, value, note, onClick, tone}) {
-  return <button type="button" className={'kpi-card' + (tone ? ' ' + tone : '')} onClick={onClick}>
-    <small>{label}</small><strong>{value}</strong><span>{note}</span></button>;
+function Preview({title, count, empty, rows, onAll, render}) {
+  return <section className="ds-panel ds-preview" aria-label={title}>
+    <div className="ds-toolbar"><h2>{title}{count > 0 && <span className="ds-count-note"> · {count}</span>}</h2><button type="button" className="btn btn-tertiary btn-sm" onClick={onAll}>View all</button></div>
+    {rows.length ? <div className="ds-rows-inline">{rows.slice(0, 5).map(render)}</div> : <p className="ds-note ds-preview-empty">{empty}</p>}
+  </section>;
 }
 
-function Preview({title, empty, rows, onAll, render}) {
-  return <section className="card preview"><div className="card-heading"><h2>{title}</h2><button type="button" className="text-btn" onClick={onAll}>View all</button></div>
-    {rows.length ? <ul className="preview-list">{rows.slice(0, 5).map(render)}</ul> : <p className="muted">{empty}</p>}</section>;
-}
+// Staff landing page: what is happening and what needs a decision today. Figures come from dashboardMetrics (same rows as the lists they open).
+export default function AdminOverview({data, dash, branches, branch, setBranch, go, money, dateLabel, today, loading, loadError, onRetry, onAddResident, onReminders, busy}) {
+  const header = <PageHeader title="Overview" subtitle={`${branches.find(x => String(x.id) === String(branch))?.name || 'All branches'} · ${longDate()}`}
+    action={<button type="button" className="btn btn-primary" onClick={onAddResident}>+ Add resident</button>}/>;
+  if (loadError) return <div className="ds-page">{header}<ErrorState title="The overview could not be loaded" detail={loadError} onRetry={onRetry}/></div>;
+  if (loading) return <div className="ds-page" aria-busy="true">{header}<p className="ds-sr" role="status">Loading overview…</p>
+    <div className="ds-stats ds-stats-4">{Array.from({length: 4}, (_, i) => <div key={i} className="ds-stat ds-skel" aria-hidden="true"/>)}</div>
+    <div className="ds-stats ds-stats-2">{Array.from({length: 2}, (_, i) => <div key={i} className="ds-stat ds-skel ds-skel-tall" aria-hidden="true"/>)}</div></div>;
 
-// Owner / branch-admin landing page: one branch selector, clickable KPIs, five-row previews. Detail lives on the pages.
-export default function AdminOverview({data, dash, branches, branch, setBranch, go, money, dateLabel}) {
-  const id = branch ? Number(branch) : null;
-  const inBranch = row => !id || row.branch_id === id;
-  const d = dash || {};
-  const invoices = data.invoices.filter(inBranch).filter(i => num(i.balance) > 0).sort((a, b) => String(a.due_on).localeCompare(String(b.due_on)));
-  const admissions = data.admissions.filter(inBranch).filter(a => ['pending', 'needs_info'].includes(a.status));
-  const complaints = data.complaints.filter(c => c.status !== 'resolved' && (!id || c.branch_id === undefined || c.branch_id === id));
-  const vacant = data.rooms.filter(r => r.active && inBranch(r) && r.available > 0).sort((a, b) => b.available - a.available || a.number.localeCompare(b.number));
-  const b = branch ? {branch} : {};
-  const noBranches = !branches.length;
-  return <>
-    <div className="dash-toolbar"><label className="field compact">Branch
-      <select value={branch} onChange={e => setBranch(e.target.value)}><option value="">All branches</option>{branches.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-      <p className="muted">Everything on this page follows the selected branch. Click a card to open the matching list.</p></div>
-    {noBranches && <div className="info-strip">No branch yet. Open Branches to add your first location.</div>}
-    <div className="kpi-grid">
-      <Card label="Residents" value={d.residents ?? 0} note="Open the resident list" onClick={() => go('Residents', {res: {...b, status: 'active'}})}/>
-      <Card label="Occupancy" value={`${d.occupied ?? 0} / ${d.beds ?? 0}`} note={`${d.occupancy_percent ?? 0}% filled · ${Math.max((d.beds ?? 0) - (d.occupied ?? 0), 0)} vacant`} onClick={() => go('Rooms', {room: {...b, occupancy: 'available'}})}/>
-      <Card label="Overdue invoices" value={d.overdue_invoice_count ?? 0} note={`${money(d.outstanding)} outstanding in total`} tone={num(d.overdue_invoice_count) ? 'warn' : ''} onClick={() => go('Fees & payments', {invoiceStatus: 'overdue', tab: 'invoices'})}/>
-      <Card label="Collected this month" value={money(d.collected)} note="Paid on this month's invoices" onClick={() => go('Fees & payments', {tab: 'payments'})}/>
-      <Card label="Admissions waiting" value={d.pending_admissions ?? 0} note="Pending or needs information" onClick={() => go('Admissions', {adm: {...b, status: 'open'}})}/>
-      <Card label="Open complaints" value={d.open_complaints ?? 0} note="Open or in progress" tone={num(d.open_complaints) ? 'warn' : ''} onClick={() => go('Complaints', {comp: {...b, status: 'open'}})}/>
-      <Card label="Stay requests" value={num(d.pending_extensions) + num(d.upcoming_moveouts)} note={`${d.pending_extensions ?? 0} extensions · ${d.upcoming_moveouts ?? 0} move-outs in 30 days`} onClick={() => go('Stay requests')}/>
-      <Card label="Failed reminders" value={d.reminder_failures ?? 0} note="Open message activity" tone={num(d.reminder_failures) ? 'warn' : ''} onClick={() => go('Message activity', {msg: {status: 'failed'}})}/>
+  const m = dashboardMetrics(data, {branchId: branch ? Number(branch) : null, today}), b = branch ? {branch} : {}, failed = Number(dash?.reminder_failures || 0);
+  const rows = [
+    m.overdueCount > 0 && {key: 'overdue', count: m.overdueCount, title: `${plural(m.overdueCount, 'overdue invoice')} · ${money(m.overdueAmount)}`, detail: 'Residents who are past their due date.',
+      open: () => go('Fees & payments', {invoiceStatus: 'overdue', tab: 'invoices'}), extra: onReminders && <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={onReminders}>Send reminders</button>},
+    m.admissionsWaiting > 0 && {key: 'adm', count: m.admissionsWaiting, title: `${plural(m.admissionsWaiting, 'admission')} awaiting a decision`, detail: 'Approve or reject so the room can be filled.', open: () => go('Admissions', {adm: {...b, status: 'open'}})},
+    m.complaintsOpen > 0 && {key: 'comp', count: m.complaintsOpen, title: `${plural(m.complaintsOpen, 'open complaint')}`, detail: m.oldestComplaintDays > 0 ? `Oldest is ${plural(m.oldestComplaintDays, 'day')} old.` : 'Raised today.', open: () => go('Complaints', {comp: {...b, status: 'open'}})},
+    m.waiting > 0 && {key: 'wait', count: m.waiting, title: `${plural(m.waiting, 'resident')} waiting for a room`, detail: 'Registered but not yet allocated, so not billed.', open: () => go('Residents', {res: {...b, status: 'active', allocation: 'unallocated'}})},
+    m.stayPending > 0 && {key: 'stay', count: m.stayPending, title: `${plural(m.stayPending, 'stay request')} to review`, detail: 'Extensions, room changes and vacating.', open: () => go('Stay requests')},
+    m.moveOuts > 0 && {key: 'out', count: m.moveOuts, title: `${plural(m.moveOuts, 'move-out')} in the next 30 days`, detail: 'Plan the vacancies and final settlements.', open: () => go('Stay requests')},
+    failed > 0 && {key: 'fail', count: failed, title: `${plural(failed, 'reminder')} failed to send`, detail: 'Check the email or WhatsApp settings.', open: () => go('Message activity', {msg: {status: 'failed'}})}].filter(Boolean);
+  const activityText = e => e.kind === 'payment' ? `Payment ${money(e.amount)} from ${e.who}` : e.kind === 'admission' ? `Admission request from ${e.who}` : `Complaint: ${e.title}`;
+  const activityGo = e => e.kind === 'payment' ? go('Fees & payments', {tab: 'payments'}) : e.kind === 'admission' ? go('Admissions', {adm: {...b}}) : go('Complaints', {comp: {...b}});
+
+  return <div className="ds-page">
+    {header}
+    <div className="ds-dash-toolbar"><FormField label="Branch"><select value={branch} onChange={e => setBranch(e.target.value)}><option value="">All branches</option>{branches.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></FormField>
+      <p className="ds-note">Every figure follows this branch. Select one to open the matching list.</p></div>
+    {!branches.length && <div className="price-panel idle">No branch yet. Open Branches to add your first location.</div>}
+
+    <div className="ds-stats ds-stats-4" aria-label="Key figures">
+      <StatCard tone="primary" label="Residents staying" value={m.staying} note={m.waiting > 0 ? `${m.waiting} waiting for a room` : 'Everyone has a room'} onClick={() => go('Residents', {res: {...b, status: 'active', allocation: 'allocated'}})}/>
+      <StatCard tone="primary" label="Occupancy" value={`${m.occupied} / ${m.capacity}`} note={`${m.occupancyPercent}% filled · ${m.vacant} vacant (${m.vacantAc} AC, ${m.vacantNonAc} Non-AC)`} onClick={() => go('Rooms', {room: {...b, occupancy: 'available'}})}/>
+      <StatCard tone={m.outstanding > 0 ? 'primary-warning' : 'primary'} label="Fees outstanding" value={money(m.outstanding)} note={m.outstanding > 0 ? `${plural(m.owingResidents, 'resident')} owe · ${money(m.overdueAmount)} overdue` : 'Nothing owed'} onClick={() => go('Fees & payments', {invoiceStatus: 'unpaid', tab: 'invoices'})}/>
+      <StatCard tone="primary" label="Collected this month" value={money(m.collectedMonth)} note="Payments received this calendar month" onClick={() => go('Fees & payments', {tab: 'payments'})}/>
     </div>
-    <div className="preview-grid">
-      <Preview title="Fees to follow up" empty="No unpaid invoices." rows={invoices} onAll={() => go('Fees & payments', {invoiceStatus: 'overdue', tab: 'invoices'})}
-        render={i => <li key={i.id}><strong>{i.resident_name}</strong><span>{i.room_number || '—'} · due {dateLabel(i.due_on)}</span><em>{money(i.balance)}</em></li>}/>
-      <Preview title="Admissions waiting" empty="No admissions are waiting for a decision." rows={admissions} onAll={() => go('Admissions', {adm: {...b, status: 'open'}})}
-        render={a => <li key={a.id}><strong>{a.name}</strong><span>{a.preferred_sharing}-person · move-in {dateLabel(a.move_in_date)}</span><em>{a.status.replace('_', ' ')}</em></li>}/>
-      <Preview title="Open complaints" empty="No open complaints." rows={complaints} onAll={() => go('Complaints', {comp: {...b, status: 'open'}})}
-        render={c => <li key={c.id}><strong>{c.title}</strong><span>{c.resident_name} · {c.category}</span><em>{c.status.replace('_', ' ')}</em></li>}/>
-      <Preview title="Rooms with vacancies" empty="No vacant beds." rows={vacant} onAll={() => go('Rooms', {room: {...b, occupancy: 'available'}})}
-        render={r => <li key={r.id}><strong>{r.number}</strong><span>{r.ac ? 'AC' : 'Non-AC'} · {r.capacity}-person</span><em>{r.available} vacant</em></li>}/>
+
+    <div className="ds-split">
+      <section className="ds-panel" aria-label="Needs attention today"><div className="ds-toolbar"><h2>Needs attention today</h2></div>
+        {rows.length ? <ul className="ds-actionlist">{rows.map(r => <li key={r.key} className="ds-actionrow">
+          <span className="ds-count" aria-hidden="true">{r.count}</span>
+          <div className="ds-action-text"><strong>{r.title}</strong><small>{r.detail}</small></div>
+          <div className="ds-action-buttons">{r.extra}<button type="button" className="btn btn-secondary btn-sm" onClick={r.open}>Open</button></div></li>)}</ul>
+          : <p className="ds-note ds-preview-empty"><strong>All clear.</strong> Nothing needs your attention right now.</p>}
+      </section>
+      <section className="ds-panel ds-activity" aria-label="Recent activity"><div className="ds-toolbar"><h2>Recent activity</h2></div>
+        {m.activity.length ? <div className="ds-rows-inline">{m.activity.map(e => <ListRow key={e.id} title={activityText(e)} meta={dateLabel(e.at)} actions={<button type="button" className="btn btn-tertiary btn-sm" onClick={() => activityGo(e)}>Open</button>}/>)}</div>
+          : <p className="ds-note ds-preview-empty">Nothing has happened yet. Payments, admissions and complaints will appear here.</p>}
+      </section>
     </div>
-  </>;
+
+    <div className="ds-preview-grid ds-preview-3">
+      <Preview title="Fees to follow up" count={m.owingResidents} empty="Nothing is owed. All fees are up to date." rows={m.feesDue} onAll={() => go('Fees & payments', {invoiceStatus: 'unpaid', tab: 'invoices'})}
+        render={g => <ListRow key={g.resident_id} title={g.name} badge={g.overdueCount > 0 ? <StatusBadge value="overdue"/> : <StatusBadge value="due"/>} meta={`${g.room || 'No room'} · due since ${dateLabel(g.oldestDue)}`} value={money(g.balance)}/>}/>
+      <Preview title="Admissions to approve" count={m.admissionsWaiting} empty="No admissions are waiting for a decision." rows={m.admissionsList} onAll={() => go('Admissions', {adm: {...b, status: 'open'}})}
+        render={a => <ListRow key={a.id} title={a.name} badge={<StatusBadge value={a.status}/>} meta={`${a.preferred_sharing}-person · move-in ${dateLabel(a.move_in_date)}`}/>}/>
+      <Preview title="Complaints to handle" count={m.complaintsOpen} empty="No open complaints." rows={m.complaintsList} onAll={() => go('Complaints', {comp: {...b, status: 'open'}})}
+        render={c => <ListRow key={c.id} title={c.title} badge={<StatusBadge value={c.status}/>} meta={`${c.resident_name} · ${c.category} · ${dateLabel(c.created_at)}`}/>}/>
+    </div>
+  </div>;
 }

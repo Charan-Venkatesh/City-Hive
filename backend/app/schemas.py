@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
-from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator
+from pydantic import BaseModel, EmailStr, Field, model_validator, field_validator, StrictBool
 from urllib.parse import urlsplit
 Money = Decimal
 class Login(BaseModel):
@@ -24,13 +24,19 @@ class RoomCreate(BaseModel):
     floor: str = Field(min_length=1,max_length=30)
     capacity: int = Field(ge=1,le=8)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
-    ac: bool = False
+    ac: StrictBool
+    @model_validator(mode='before')
+    @classmethod
+    def room_type_must_be_explicit(cls,data):
+        if isinstance(data,dict) and data.get('ac') is None:
+            raise ValueError('Room type is required: send ac=true for an AC room or ac=false for a Non-AC room')
+        return data
 class RoomUpdate(BaseModel):
     number: str = Field(min_length=1,max_length=30,pattern=r'\S')
     floor: str = Field(min_length=1,max_length=30)
     capacity: int = Field(ge=1,le=8)
     monthly_fee: Money = Field(ge=0,le=1000000,decimal_places=2)
-    ac: bool = False
+    ac: StrictBool | None = None  # omitted = keep the saved room type
 class FeePlanCreate(BaseModel):
     branch_id: int = Field(gt=0)
     name: str = Field(min_length=2,max_length=100,pattern=r'\S')

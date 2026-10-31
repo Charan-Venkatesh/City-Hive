@@ -566,7 +566,7 @@ def update_room(room_id: int,data: RoomUpdate,db: Session = Depends(get_db),user
     occupied=db.scalar(select(func.count(Resident.id)).where(Resident.room_id==room.id,Resident.status=='active')) or 0
     if data.capacity<occupied: raise HTTPException(409,'Capacity cannot be set below current occupancy')
     room.number,room.floor,room.capacity,room.monthly_fee=data.number.strip(),data.floor.strip(),data.capacity,data.monthly_fee
-    room.ac=data.ac
+    if data.ac is not None: room.ac=data.ac
     db.commit()
     return {'message':'Room updated'}
 def fee_plan_data(plan):

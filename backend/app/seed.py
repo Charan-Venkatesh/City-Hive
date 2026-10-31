@@ -11,10 +11,10 @@ def main():
     with SessionLocal() as db:
         if db.scalar(select(Room.id)) or db.scalar(select(Resident.id)):
             print('Demo seed skipped: rooms or residents already exist.'); return
-        rooms=[Room(number='101',floor='Ground',capacity=1,monthly_fee=12000),
-               Room(number='102',floor='Ground',capacity=2,monthly_fee=8500),
-               Room(number='201',floor='First',capacity=3,monthly_fee=6500),
-               Room(number='202',floor='First',capacity=3,monthly_fee=6500)]
+        rooms=[Room(number='101',floor='Ground',capacity=1,monthly_fee=12000,ac=True),
+               Room(number='102',floor='Ground',capacity=2,monthly_fee=8500,ac=False),
+               Room(number='201',floor='First',capacity=3,monthly_fee=6500,ac=False),
+               Room(number='202',floor='First',capacity=3,monthly_fee=6500,ac=True)]
         db.add_all(rooms); db.flush()
         for name,email,room,discount in [('Aarav Demo','aarav@example.com',rooms[1],500),('Maya Demo','maya@example.com',rooms[2],0),('Dev Demo','dev@example.com',rooms[2],250)]:
             u=User(email=email,password_hash=hashing.hash('ResidentDemo123!'),role='resident',must_change_password=True)

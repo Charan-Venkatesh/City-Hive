@@ -60,7 +60,7 @@ def resident(c,h,email='resident@example.com'):
     assert r.status_code==201,r.text
     return r.json()['id']
 def room(c,h,capacity=1):
-    r=c.post('/api/rooms',headers=h,json={'number':'101','floor':'Ground','capacity':capacity,'monthly_fee':'8500.00'})
+    r=c.post('/api/rooms',headers=h,json={'ac':False,'number':'101','floor':'Ground','capacity':capacity,'monthly_fee':'8500.00'})
     assert r.status_code==201,r.text
     return r.json()['id']
 def signin(c,email='resident@example.com'):
@@ -90,7 +90,7 @@ def test_capacity_discount_and_onboarding(ctx):
     rh=signin(c)
     assert c.get('/api/rooms',headers=rh).status_code==403
     assert len(c.get('/api/residents',headers=rh).json())==1
-    assert c.post('/api/rooms',headers=rh,json={'number':'hack','floor':'G','capacity':2,'monthly_fee':1}).status_code==403
+    assert c.post('/api/rooms',headers=rh,json={'ac':False,'number':'hack','floor':'G','capacity':2,'monthly_fee':1}).status_code==403
 
 def test_invoices_partial_payments_and_receipts(ctx):
     c,h,sessions=ctx; rid=resident(c,h); room_id=room(c,h)
@@ -176,7 +176,7 @@ def test_financial_analytics_settlement_aging_history_and_csv(ctx):
     if (local_today()-date.fromisoformat(invoice['due_on'])).days in range(8,31):
         assert report['aging']['8_30_days']=='5000.00'
     assert c.post('/api/payments',headers=h,json={**payment,'amount':'5000','idempotency_key':'analytics-cash-settle'}).status_code==201
-    new_room=c.post('/api/rooms',headers=h,json={'number':'102','floor':'First','capacity':1,'monthly_fee':'9000'}).json()['id']
+    new_room=c.post('/api/rooms',headers=h,json={'ac':False,'number':'102','floor':'First','capacity':1,'monthly_fee':'9000'}).json()['id']
     assert c.put(f'/api/residents/{rid}/allocation',headers=h,json={'room_id':new_room,'discount':'0'}).status_code==200
     settled=c.get('/api/analytics/financial',headers=h,params=params).json()
     delay=max(0,(local_today()-date.fromisoformat(invoice['due_on'])).days)
@@ -197,8 +197,8 @@ def test_financial_analytics_branch_scoping_and_resident_denial(ctx):
     branch_b=c.post('/api/branches',headers=h,json={'name':'Analytics Branch B'}).json()['id']
     resident_a=resident(c,h,'analytics-a@example.com')
     resident_b=c.post('/api/residents',headers=h,json={'branch_id':branch_b,'name':'Analytics Resident B','email':'analytics-b@example.com','phone':'9111111111','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!'}).json()['id']
-    room_a=c.post('/api/rooms',headers=h,json={'branch_id':branch_a,'number':'A-analytics','floor':'G','capacity':1,'monthly_fee':'1000'}).json()['id']
-    room_b=c.post('/api/rooms',headers=h,json={'branch_id':branch_b,'number':'B-analytics','floor':'G','capacity':1,'monthly_fee':'2000'}).json()['id']
+    room_a=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_a,'number':'A-analytics','floor':'G','capacity':1,'monthly_fee':'1000'}).json()['id']
+    room_b=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_b,'number':'B-analytics','floor':'G','capacity':1,'monthly_fee':'2000'}).json()['id']
     c.put(f'/api/residents/{resident_a}/allocation',headers=h,json={'room_id':room_a,'discount':'0'})
     c.put(f'/api/residents/{resident_b}/allocation',headers=h,json={'room_id':room_b,'discount':'0'})
     c.post('/api/billing/generate',headers=h,json={'month':local_today().replace(day=1).isoformat()})
@@ -333,7 +333,7 @@ def test_complaint_privacy_and_response(ctx):
 def test_validation_and_auth(ctx):
     c,h,_=ctx
     assert c.get('/api/residents').status_code==401
-    assert c.post('/api/rooms',headers=h,json={'number':'101','floor':'Ground','capacity':0,'monthly_fee':-1}).status_code==422
+    assert c.post('/api/rooms',headers=h,json={'ac':False,'number':'101','floor':'Ground','capacity':0,'monthly_fee':-1}).status_code==422
     resident(c,h)
     assert c.post('/api/residents',headers=h,json={'name':'Bad','email':'bad@example.com','phone':'123','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!','aadhaar_last4':'123456789012'}).status_code==422
 
@@ -403,7 +403,7 @@ def test_branch_setup_and_cross_branch_allocation_guard(ctx):
     assert created.status_code==201
     branch_b=created.json()['id']
     resident_id=resident(c,h)
-    room_id=c.post('/api/rooms',headers=h,json={'branch_id':branch_b,'number':'B-101','floor':'First','capacity':2,'monthly_fee':'9000.00'}).json()['id']
+    room_id=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_b,'number':'B-101','floor':'First','capacity':2,'monthly_fee':'9000.00'}).json()['id']
     assert c.put(f'/api/residents/{resident_id}/allocation',headers=h,json={'room_id':room_id,'discount':'0'}).status_code==409
     assert c.get('/api/branches').json()[0]['name']==branch_a['name']
 
@@ -415,8 +415,8 @@ def test_branch_admin_isolation_across_residents_rooms_invoices_and_payments(ctx
     response=c.post('/api/residents',headers=h,json={'branch_id':branch_b,'name':'Branch B Resident','email':'b@example.com','phone':'9111111111','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!'})
     assert response.status_code==201,response.text
     resident_b=response.json()['id']
-    room_a=c.post('/api/rooms',headers=h,json={'branch_id':branch_a,'number':'A-101','floor':'Ground','capacity':2,'monthly_fee':'8500'}).json()['id']
-    room_b=c.post('/api/rooms',headers=h,json={'branch_id':branch_b,'number':'B-101','floor':'Ground','capacity':2,'monthly_fee':'9000'}).json()['id']
+    room_a=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_a,'number':'A-101','floor':'Ground','capacity':2,'monthly_fee':'8500'}).json()['id']
+    room_b=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_b,'number':'B-101','floor':'Ground','capacity':2,'monthly_fee':'9000'}).json()['id']
     assert c.put(f'/api/branches/{branch_b}/publication?published=true',headers=h).status_code==200
     assert c.put(f'/api/residents/{resident_a}/allocation',headers=h,json={'room_id':room_a,'discount':'0'}).status_code==200
     assert c.put(f'/api/residents/{resident_b}/allocation',headers=h,json={'room_id':room_b,'discount':'0'}).status_code==200
@@ -445,7 +445,7 @@ def test_branch_admin_isolation_across_residents_rooms_invoices_and_payments(ctx
     assert c.put(f'/api/admissions/{admission.json()["id"]}',headers=headers,json={'status':'approved','note':''}).status_code==403
     assert c.put(f'/api/residents/{resident_b}/allocation',headers=headers,json={'room_id':room_b,'discount':'0'}).status_code==403
     assert c.put(f'/api/residents/{resident_b}/id-review',headers=headers,json={'status':'reviewed'}).status_code==403
-    assert c.post('/api/rooms',headers=headers,json={'branch_id':branch_b,'number':'B-102','floor':'Ground','capacity':2,'monthly_fee':'9000'}).status_code==403
+    assert c.post('/api/rooms',headers=headers,json={'ac':False,'branch_id':branch_b,'number':'B-102','floor':'Ground','capacity':2,'monthly_fee':'9000'}).status_code==403
     assert all(e['recipient']!='admission-b@example.com' for e in c.get('/api/emails',headers=headers).json())
     assert c.put(f'/api/branches/{branch_b}',headers=headers,json={'name':'Branch B','active':True}).status_code==403
     assert c.post('/api/branch-admins',headers=headers,json={'email':'other@example.com','temporary_password':'Temporary123!','branch_ids':[branch_b]}).status_code==403
@@ -466,7 +466,7 @@ def test_owner_can_assign_branch_admin_and_account_must_change_password(ctx):
 def test_public_admission_is_idempotent_reviewable_and_enrollable(ctx):
     c,h,_=ctx
     branch=c.get('/api/branches').json()[0]['id']
-    r=c.post('/api/rooms',headers=h,json={'branch_id':branch,'number':'101','floor':'Ground','capacity':2,'monthly_fee':'8500'})
+    r=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch,'number':'101','floor':'Ground','capacity':2,'monthly_fee':'8500'})
     assert r.status_code==201
     availability=c.get(f'/api/public/branches/{branch}/availability')
     assert availability.json()==[{'sharing':2,'monthly_fee':'8500.00','advance_amount':'0.00','additional_charge_label':'','additional_charge_amount':'0.00','available_beds':2}]
@@ -490,12 +490,12 @@ def test_public_admission_is_idempotent_reviewable_and_enrollable(ctx):
 def test_public_branches_require_owner_publication_and_complete_listing(ctx):
     c,h,_=ctx
     internal=c.post('/api/branches',headers=h,json={'name':'Placeholder Location','address':'Locality, City','description':'Configure this location in branch settings.'}).json()['id']
-    c.post('/api/rooms',headers=h,json={'branch_id':internal,'number':'P-101','floor':'First','capacity':2,'monthly_fee':'9500'})
+    c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':internal,'number':'P-101','floor':'First','capacity':2,'monthly_fee':'9500'})
     assert c.put(f'/api/branches/{internal}/publication?published=true',headers=h).status_code==409
     branch=c.post('/api/branches',headers=h,json={'name':'Second Location','address':'Locality, City','description':'Configured public description'}).json()['id']
     assert all(item['id']!=branch for item in c.get('/api/branches').json())
     assert c.put(f'/api/branches/{branch}/publication?published=true',headers=h).status_code==409
-    c.post('/api/rooms',headers=h,json={'branch_id':branch,'number':'S-101','floor':'First','capacity':2,'monthly_fee':'9500'})
+    c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch,'number':'S-101','floor':'First','capacity':2,'monthly_fee':'9500'})
     assert c.put(f'/api/branches/{branch}/publication?published=true').status_code==401
     response=c.put(f'/api/branches/{branch}/publication?published=true',headers=h)
     assert response.status_code==200 and response.json()['published']
@@ -514,7 +514,7 @@ def test_room_edit_allocation_history_stays_and_scheduled_vacating(ctx,monkeypat
     c.put(f'/api/residents/{resident_a}/allocation',headers=h,json={'room_id':room_id,'discount':'0','reason':'Move in'})
     c.put(f'/api/residents/{resident_b}/allocation',headers=h,json={'room_id':room_id,'discount':'0'})
     assert c.put(f'/api/rooms/{room_id}',headers=h,json={'number':'101','floor':'Ground','capacity':1,'monthly_fee':'9000'}).status_code==409
-    target=c.post('/api/rooms',headers=h,json={'number':'102','floor':'First','capacity':2,'monthly_fee':'9000'}).json()['id']
+    target=c.post('/api/rooms',headers=h,json={'ac':False,'number':'102','floor':'First','capacity':2,'monthly_fee':'9000'}).json()['id']
     assert c.put(f'/api/rooms/{target}',headers=h,json={'number':'102','floor':'Second','capacity':3,'monthly_fee':'9500'}).status_code==200
     rh=signin(c,'stay-a@example.com')
     future=local_today()+timedelta(days=40)
@@ -596,8 +596,8 @@ def test_effective_fee_plans_preserve_invoice_snapshots_and_scope(ctx,monkeypatc
     resident_a=resident(c,h,'fee-a@example.com')
     resident_b=c.post('/api/residents',headers=h,json={'branch_id':branch_b,'name':'Fee Resident B','email':'fee-b@example.com',
         'phone':'9111111111','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!'}).json()['id']
-    room_a=c.post('/api/rooms',headers=h,json={'branch_id':branch_a,'number':'A-FEE','floor':'Ground','capacity':2,'monthly_fee':'8500'}).json()['id']
-    c.post('/api/rooms',headers=h,json={'branch_id':branch_b,'number':'B-FEE','floor':'Ground','capacity':2,'monthly_fee':'9000'})
+    room_a=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_a,'number':'A-FEE','floor':'Ground','capacity':2,'monthly_fee':'8500'}).json()['id']
+    c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_b,'number':'B-FEE','floor':'Ground','capacity':2,'monthly_fee':'9000'})
     assert c.put(f'/api/residents/{resident_a}/allocation',headers=h,json={'room_id':room_a,'discount':'500'}).status_code==200
     month=local_today().replace(day=1)
     end=month+timedelta(days=32); next_month=end.replace(day=1)
@@ -671,7 +671,7 @@ def test_deposit_advance_settlement_actual_refunds_and_branch_privacy(ctx):
     resident_a=resident(c,h,'settlement-a@example.com')
     resident_b=c.post('/api/residents',headers=h,json={'branch_id':branch_b,'name':'Settlement Resident B','email':'settlement-b@example.com',
         'phone':'9111111111','joined_on':local_today().isoformat(),'temporary_password':'Temporary123!'}).json()['id']
-    room_a=c.post('/api/rooms',headers=h,json={'branch_id':branch_a,'number':'A-SET','floor':'Ground','capacity':1,'monthly_fee':'8500'}).json()['id']
+    room_a=c.post('/api/rooms',headers=h,json={'ac':False,'branch_id':branch_a,'number':'A-SET','floor':'Ground','capacity':1,'monthly_fee':'8500'}).json()['id']
     c.put(f'/api/residents/{resident_a}/allocation',headers=h,json={'room_id':room_a,'discount':'0'})
     month=local_today().replace(day=1).isoformat()
     c.post('/api/billing/generate',headers=h,json={'month':month})
@@ -794,7 +794,7 @@ def test_rooms_carry_ac_flag(ctx):
     c,h,sessions=ctx
     r=c.post('/api/rooms',headers=h,json={'number':'AC-1','floor':'1','capacity':2,'monthly_fee':'5000','ac':True})
     assert r.status_code==201
-    r2=c.post('/api/rooms',headers=h,json={'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000'})
+    r2=c.post('/api/rooms',headers=h,json={'ac':False,'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000'})
     rooms={x['number']:x for x in c.get('/api/rooms',headers=h).json()}
     assert rooms['AC-1']['ac'] is True and rooms['N-1']['ac'] is False
     assert c.put(f"/api/rooms/{rooms['N-1']['id']}",headers=h,json={'number':'N-1','floor':'1','capacity':2,'monthly_fee':'4000','ac':True}).status_code==200
@@ -852,3 +852,32 @@ def test_dashboard_branch_filter_and_optional_admin_phone(ctx,monkeypatch):
     assert c.post('/api/branch-admins',headers=h,json=body).status_code==422
     monkeypatch.setattr(settings,'otp_required',False)
     assert c.post('/api/branch-admins',headers=h,json=body).status_code==201
+
+
+def test_room_creation_requires_an_explicit_room_type(ctx):
+    c,h,sessions=ctx
+    base={'number':'TYPE-1','floor':'1','capacity':2,'monthly_fee':'4000'}
+    before=len(c.get('/api/rooms',headers=h).json())
+    missing=c.post('/api/rooms',headers=h,json=base)
+    assert missing.status_code==422
+    assert 'Room type is required' in missing.text and 'ac=true' in missing.text and 'ac=false' in missing.text
+    assert c.post('/api/rooms',headers=h,json={**base,'ac':None}).status_code==422
+    for bad in ('maybe','',2,[],{}):
+        assert c.post('/api/rooms',headers=h,json={**base,'ac':bad}).status_code==422,bad
+    assert len(c.get('/api/rooms',headers=h).json())==before          # nothing was silently created as Non-AC
+    assert c.post('/api/rooms',headers=h,json={**base,'ac':True}).status_code==201
+    assert c.post('/api/rooms',headers=h,json={**base,'number':'TYPE-2','ac':False}).status_code==201
+    saved={x['number']:x['ac'] for x in c.get('/api/rooms',headers=h).json()}
+    assert saved['TYPE-1'] is True and saved['TYPE-2'] is False
+
+
+def test_editing_a_room_without_a_type_keeps_the_saved_type(ctx):
+    c,h,sessions=ctx
+    rid=c.post('/api/rooms',headers=h,json={'number':'KEEP-1','floor':'1','capacity':2,'monthly_fee':'4000','ac':True}).json()['id']
+    edit={'number':'KEEP-1','floor':'2','capacity':3,'monthly_fee':'4500'}
+    assert c.put(f'/api/rooms/{rid}',headers=h,json=edit).status_code==200
+    row=[x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]
+    assert row['ac'] is True and row['floor']=='2' and row['capacity']==3     # AC was not silently reset
+    assert c.put(f'/api/rooms/{rid}',headers=h,json={**edit,'ac':False}).status_code==200
+    assert [x for x in c.get('/api/rooms',headers=h).json() if x['id']==rid][0]['ac'] is False
+    assert c.put(f'/api/rooms/{rid}',headers=h,json={**edit,'ac':'maybe'}).status_code==422
