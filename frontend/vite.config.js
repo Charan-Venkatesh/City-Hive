@@ -13,5 +13,5 @@ export default defineConfig(({command,mode}) => {
   } catch { /* Build packages may omit Git metadata. Never invent a revision. */ }
   return {plugins:[react(),{name:'cityhive-build-info',generateBundle(){
     this.emitFile({type:'asset',fileName:'build-info.json',source:JSON.stringify({application:'Cityhive',revision,dirty,apiBase},null,2)});
-  }}],server:{proxy:{'/api':{target:process.env.API_PROXY_TARGET || 'http://127.0.0.1:8000',changeOrigin:true}}}};
+  }}],server:{host:'0.0.0.0',allowedHosts:true,proxy:{'/api':{target:process.env.API_PROXY_TARGET || 'http://127.0.0.1:8000',changeOrigin:true}}}};
 });
