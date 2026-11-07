@@ -993,29 +993,34 @@ def generate_monthly_invoices(db,month,scope=None,scheduled=False):
     db.commit()
     return count
 @app.post('/api/payments',status_code=201)
-def payment(data: PaymentCreate,db: Session = Depends(get_db),user: User = Depends(staff)):
+def payment(data: PaymentCreate,db: Session = Depends(get_db),user: User = Depends(active_user)):
     invoice = db.scalar(select(Invoice).where(Invoice.id==data.invoice_id).with_for_update())
     if not invoice: raise HTTPException(404,'Invoice not found')
     invoice_resident=db.get(Resident,invoice.resident_id)
-    require_branch(db,user,invoice.branch_id)
+    if is_staff(user):
+        require_branch(db,user,invoice.branch_id)
+    else:
+        if not invoice_resident or invoice_resident.user_id!=user.id:
+            raise HTTPException(403,'You can only pay for your own invoice')
+    payer_name=data.payer_name.strip() or (invoice_resident.name if invoice_resident else '')
     existing = db.scalar(select(Payment).where(Payment.idempotency_key==data.idempotency_key))
     if existing:
-        if (existing.invoice_id,existing.amount,existing.method,existing.reference,existing.payer_name,existing.note)!=(data.invoice_id,data.amount,data.method,data.reference,data.payer_name,data.note):
+        if (existing.invoice_id,existing.amount,existing.method,existing.reference)!=(data.invoice_id,data.amount,data.method,data.reference):
             raise HTTPException(409,'Payment key was already used for another request')
-        return {'id':existing.id,'message':'Payment was already recorded'}
+        return {'id':existing.id,'invoice_id':existing.invoice_id,'message':'Payment was already recorded'}
     if data.amount>invoice.amount-paid_total(db,invoice.id): raise HTTPException(400,'Payment exceeds outstanding balance')
-    if data.method!='cash' and not data.reference.strip(): raise HTTPException(400,'UPI or bank payment reference is required')
+    if data.method!='cash' and not data.reference.strip(): raise HTTPException(400,'Payment reference or transaction ID is required')
     paid_at=data.paid_at or now()
     if paid_at.tzinfo is None: raise HTTPException(422,'Payment date and time must include a timezone')
     if paid_at.astimezone(timezone.utc)>datetime.now(timezone.utc)+timedelta(minutes=5):
         raise HTTPException(422,'Payment date and time cannot be in the future')
-    p = Payment(**data.model_dump(exclude={'paid_at'}),paid_at=paid_at,recorded_by=user.id)
+    p = Payment(**data.model_dump(exclude={'paid_at','payer_name'}),payer_name=payer_name,paid_at=paid_at,recorded_by=user.id)
     db.add(p); db.flush()
     resident = invoice_resident
     db.add(Outbox(user_id=resident.user_id,branch_id=invoice.branch_id,dedupe_key=f'receipt:{p.id}',recipient=db.get(User,resident.user_id).email,
                   subject=f"Cityhive payment receipt SW-{p.id:06d}",body=receipt_text(db,p)))
     db.commit()
-    return {'id':p.id,'message':'Payment recorded; receipt email queued'}
+    return {'id':p.id,'invoice_id':invoice.id,'message':'Payment recorded; receipt email queued'}
 
 @app.post('/api/payments/{payment_id}/reverse')
 def reverse_payment(payment_id: int,data: PaymentReversal,db: Session=Depends(get_db),user: User=Depends(staff)):

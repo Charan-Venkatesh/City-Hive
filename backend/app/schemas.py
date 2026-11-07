@@ -97,7 +97,7 @@ class BillingRun(BaseModel):
 class PaymentCreate(BaseModel):
     invoice_id: int = Field(gt=0)
     amount: Money = Field(gt=0,le=1000000,decimal_places=2)
-    method: Literal['cash','upi','bank']
+    method: Literal['cash','upi','bank','card']
     reference: str = Field(default='',max_length=100)
     idempotency_key: str = Field(min_length=10,max_length=64)
     paid_at: datetime | None = None
@@ -186,7 +186,7 @@ class FinancialLedgerCreate(BaseModel):
     account_type: Literal['deposit','advance']
     action: Literal['received','deduction']
     amount: Money = Field(gt=0,le=10000000,decimal_places=2)
-    method: Literal['cash','upi','bank'] | None = None
+    method: Literal['cash','upi','bank','card'] | None = None
     reference: str = Field(default='',max_length=100)
     reason: str = Field(default='',max_length=500)
     idempotency_key: str = Field(min_length=10,max_length=64)
@@ -200,7 +200,7 @@ class SettlementDecision(BaseModel):
 class SettlementRefund(BaseModel):
     account_type: Literal['deposit','advance']
     amount: Money = Field(gt=0,le=10000000,decimal_places=2)
-    method: Literal['cash','upi','bank']
+    method: Literal['cash','upi','bank','card']
     reference: str = Field(default='',max_length=100)
     idempotency_key: str = Field(min_length=10,max_length=64)
 

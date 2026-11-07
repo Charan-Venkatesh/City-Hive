@@ -15,7 +15,9 @@ export default function FeesPage({admin, tab, setTab, invoices, payments, plans,
   const filtered = Boolean(filters.search || filters.status || filters.from || filters.to);
   const pad = id => 'SW-' + String(id).padStart(6, '0');
 
-  const action = !admin ? null : tab === 'plans' ? <button type="button" className="btn btn-primary" onClick={on.addPlan}>+ Add fee plan</button>
+  const unpaidInv = filteredInvoices.find(i => Number(i.balance) > 0) || invoices.find(i => Number(i.balance) > 0);
+  const action = !admin ? (totals.outstanding > 0 && unpaidInv ? <button type="button" className="btn btn-primary" onClick={() => on.onlinePay && on.onlinePay(unpaidInv)}>⚡ Pay online ({money(totals.outstanding)})</button> : null)
+    : tab === 'plans' ? <button type="button" className="btn btn-primary" onClick={on.addPlan}>+ Add fee plan</button>
     : tab === 'invoices' ? <><button type="button" className="btn btn-secondary" disabled={busy} onClick={on.reminders}>Send reminders</button>
       <button type="button" className="btn btn-primary" onClick={on.generate}>Generate invoices</button></> : null;
   const subtitle = !admin ? 'Your invoices, payments and receipts.' : tab === 'plans' ? 'Monthly prices by branch and sharing. Issued invoices never change.'
@@ -38,7 +40,9 @@ export default function FeesPage({admin, tab, setTab, invoices, payments, plans,
     actions={i => admin
       ? {primary: Number(i.balance) > 0 ? {label: 'Record payment', onClick: () => on.recordPayment(i)} : null, note: <span className="ds-note">Settled</span>,
          items: [{label: 'Invoice PDF', onClick: () => on.invoicePdf(i)}, {label: 'View payments', onClick: () => on.viewPayments(i)}]}
-      : {primary: {label: 'Invoice PDF', onClick: () => on.invoicePdf(i)}, items: [{label: 'View payments', onClick: () => on.viewPayments(i)}]}}/>
+      : {primary: Number(i.balance) > 0 ? {label: 'Pay online', onClick: () => on.onlinePay ? on.onlinePay(i) : on.recordPayment(i)} : {label: 'Invoice PDF', onClick: () => on.invoicePdf(i)},
+         note: Number(i.balance) <= 0 ? <span className="ds-note">Settled</span> : null,
+         items: Number(i.balance) > 0 ? [{label: 'Invoice PDF', onClick: () => on.invoicePdf(i)}, {label: 'View payments', onClick: () => on.viewPayments(i)}] : [{label: 'View payments', onClick: () => on.viewPayments(i)}]}}/>
     : <EmptyState title={filtered ? 'No invoices match these filters' : admin ? 'No invoices yet' : 'No invoices yet'}
         hint={filtered ? 'Clear a filter or change the search to see more.' : admin ? 'Allocate residents to rooms, then generate the month’s invoices.' : 'Your fees will appear after management generates invoices.'}
         action={!filtered && admin ? <button type="button" className="btn btn-primary" onClick={on.generate}>Generate invoices</button> : null}/>;

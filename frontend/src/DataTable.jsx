@@ -6,8 +6,9 @@ import RowMenu from './RowMenu';
 function RowActions({actions, context}) {
   if (!actions) return null;
   const {primary, items = [], note} = actions, inline = items.length === 1 && !items[0].danger;
+  const btnClass = primary?.className || (primary?.label?.toLowerCase().includes('pay') ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm');
   return <div className="ds-actions">
-    {primary ? <button type="button" className="btn btn-secondary btn-sm" disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button> : note}
+    {primary ? <button type="button" className={btnClass} disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button> : note}
     {inline && <button type="button" className="btn btn-tertiary btn-sm" onClick={items[0].onClick}>{items[0].label}</button>}
     {items.length > 0 && !inline && <RowMenu items={items} label={`More actions${context ? ' for ' + context : ''}`}/>}
   </div>;
