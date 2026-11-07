@@ -56,6 +56,8 @@ class Admission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now)
     reviewed_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    aadhaar_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    id_status: Mapped[str] = mapped_column(String(20), default='pending', server_default='pending')
     resident_id: Mapped[int | None] = mapped_column(ForeignKey('residents.id'),unique=True)
 class AdmissionEvent(Base):
     __tablename__ = 'admission_events'

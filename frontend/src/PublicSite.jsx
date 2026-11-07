@@ -274,6 +274,13 @@ export default function PublicSite({onLogin}) {
   setError('');
   setSuccess('');
   const values = Object.fromEntries(new FormData(form));
+  let aadhaarLast4 = null;
+  if (values.aadhaar) {
+    const clean = values.aadhaar.replace(/\D/g, '');
+    if (clean.length === 12 || clean.length === 4) {
+      aadhaarLast4 = clean.slice(-4);
+    }
+  }
 
   try {
    const result = await apiJson('/admissions', {
@@ -284,7 +291,8 @@ export default function PublicSite({onLogin}) {
      branch_id: Number(selected),
      preferred_sharing: Number(sharing),
      submission_key: key.current,
-     whatsapp_updates: values.whatsapp_updates === 'on'
+     whatsapp_updates: values.whatsapp_updates === 'on',
+     ...(aadhaarLast4 ? {aadhaar_last4: aadhaarLast4} : {})
     })
    });
    setReceipt({key: key.current, email: values.email});
@@ -699,6 +707,21 @@ export default function PublicSite({onLogin}) {
           <input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength={10} required autoComplete="tel-national" placeholder="10-digit mobile number" />
          </label>
          <label>
+          Aadhaar Number <span>Govt ID Verification</span>
+          <input
+            name="aadhaar"
+            type="text"
+            inputMode="numeric"
+            placeholder="12-digit Aadhaar (e.g. 5432 1234 5678)"
+            maxLength={14}
+            onChange={e => {
+              let v = e.target.value.replace(/\D/g, '').slice(0, 12);
+              const parts = v.match(/.{1,4}/g);
+              e.target.value = parts ? parts.join(' ') : v;
+            }}
+          />
+         </label>
+         <label>
           Planned move-in
           <input name="move_in_date" type="date" required min={today()} defaultValue={today()} />
          </label>
@@ -708,7 +731,7 @@ export default function PublicSite({onLogin}) {
          <textarea name="message" rows={3} maxLength={2000} placeholder="Any specific requirements (e.g. AC preference, study desk, food preferences)?" />
         </label>
         <p className="ch-privacy">
-         Your contact details are strictly used to review this enquiry. Identity documents are collected privately during check-in.
+         Your contact and Aadhaar details are strictly encrypted for PG verification and local police/management compliance.
         </p>
         {error && <p className="alert error" role="alert">{error}</p>}
         {success && <p className="alert success" role="status">{success}</p>}

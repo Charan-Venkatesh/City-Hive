@@ -157,6 +157,7 @@ class AdmissionCreate(BaseModel):
     message: str = Field(default='',max_length=2000)
     submission_key: str = Field(min_length=32,max_length=64,pattern=r'^[a-fA-F0-9-]+$')
     whatsapp_updates: bool = False
+    aadhaar_last4: str | None = Field(default=None,pattern=r'^\d{4}$')
 
 class AdmissionLookup(BaseModel):
     email: EmailStr
@@ -168,8 +169,11 @@ class LifecycleChange(BaseModel):
 class AdmissionDecision(BaseModel):
     status: Literal['needs_info','approved','rejected']
     note: str = Field(default='',max_length=2000)
+    aadhaar_last4: str | None = Field(default=None,pattern=r'^\d{4}$')
 class AdmissionEnroll(BaseModel):
     temporary_password: str = Field(min_length=10,max_length=128)
+    aadhaar_last4: str | None = Field(default=None,pattern=r'^\d{4}$')
+    id_status: Literal['pending','reviewed','rejected'] = 'reviewed'
 class StayRequestCreate(BaseModel):
     request_type: Literal['extension','vacating','shift']
     target_room_id: int | None = Field(default=None,gt=0)

@@ -249,6 +249,7 @@ def admissions(db: Session = Depends(get_db),user: User = Depends(staff)):
     return [{'id':a.id,'branch_id':a.branch_id,'name':a.name,'email':a.email,'phone':a.phone,
              'emergency_contact':a.emergency_contact,'emergency_phone':a.emergency_phone,
              'preferred_sharing':a.preferred_sharing,'move_in_date':a.move_in_date,'message':a.message,
+             'aadhaar_last4':a.aadhaar_last4,'id_status':getattr(a,'id_status','pending') or 'pending',
              'status':a.status,'admin_note':a.admin_note,'created_at':a.created_at,'resident_id':a.resident_id}
             for a in db.scalars(query)]
 @app.put('/api/admissions/{admission_id}')
@@ -259,6 +260,9 @@ def decide_admission(admission_id: int,data: AdmissionDecision,db: Session = Dep
     if admission.status not in {'pending','needs_info'}: raise HTTPException(409,'This admission can no longer be reviewed')
     old=admission.status
     if data.status==old: raise HTTPException(409,'Choose a different review status')
+    if data.aadhaar_last4:
+        admission.aadhaar_last4=data.aadhaar_last4
+        admission.id_status='reviewed'
     admission.status,admission.admin_note,admission.reviewed_by,admission.reviewed_at=data.status,data.note,user.id,now()
     db.add(AdmissionEvent(admission_id=admission.id,actor_user_id=user.id,old_status=old,new_status=data.status,note=data.note))
     branch=db.get(Branch,admission.branch_id)
@@ -282,10 +286,17 @@ def enroll_admission(admission_id: int,data: AdmissionEnroll,db: Session = Depen
         FeePlan.active.is_(True),FeePlan.effective_from<=admission.move_in_date,
         (FeePlan.effective_until.is_(None))|(FeePlan.effective_until>=admission.move_in_date)
     ).order_by(FeePlan.effective_from.desc(),FeePlan.id.desc()).limit(1))
+    aadhaar=data.aadhaar_last4 or admission.aadhaar_last4
+    id_status=data.id_status if aadhaar else 'pending'
     resident=Resident(user_id=account.id,branch_id=admission.branch_id,fee_plan_id=admission_plan.id if admission_plan else None,name=admission.name,phone=admission.phone,
                       guardian=admission.emergency_contact,guardian_phone=admission.emergency_phone,
-                      institution='',joined_on=admission.move_in_date,discount=Decimal('0'))
+                      institution='',joined_on=admission.move_in_date,discount=Decimal('0'),
+                      aadhaar_last4=aadhaar,id_status=id_status,
+                      id_reviewed_by=user.id if id_status=='reviewed' else None,
+                      id_reviewed_at=now() if id_status=='reviewed' else None)
     db.add(resident);db.flush()
+    if id_status=='reviewed':
+        db.add(IdentityReviewEvent(resident_id=resident.id,reviewer_id=user.id,old_status='pending',new_status='reviewed',note='Aadhaar identity document verified during admission enrollment'))
     old=admission.status;admission.status='enrolled';admission.resident_id=resident.id
     admission.reviewed_by=user.id;admission.reviewed_at=now()
     db.add(AdmissionEvent(admission_id=admission.id,actor_user_id=user.id,old_status=old,new_status='enrolled',note='Resident account created; room allocation pending'))
