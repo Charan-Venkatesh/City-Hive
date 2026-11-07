@@ -1,11 +1,21 @@
 import os
 import time
+import sqlite3
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 BASE_URL = 'http://localhost:5173'
+
+def ensure_outstanding_invoice():
+    db_path = '/Users/charanvenkatesh/Downloads/hostel-management/backend/staywell.db'
+    if os.path.exists(db_path):
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM payments WHERE invoice_id = 43;")
+        conn.commit()
+        conn.close()
 
 def get_driver():
     opts = webdriver.ChromeOptions()
@@ -16,6 +26,7 @@ def get_driver():
     return webdriver.Chrome(options=opts)
 
 def test_full_workflow():
+    ensure_outstanding_invoice()
     driver = get_driver()
     driver.implicitly_wait(4)
 
@@ -247,7 +258,97 @@ def test_full_workflow():
         print("   ✔ Owner logged out cleanly.")
 
         print("\n==================================================")
-        print("ALL 8 END-TO-END WORKFLOWS PASSED WITH 100% SUCCESS!")
+        print("9. TESTING STANDALONE DEDICATED DOA (DIRECT ONLINE ADMISSION) PAGE")
+        print("==================================================")
+        driver.get(BASE_URL)
+        WebDriverWait(driver, 10).until(EC.title_contains('Cityhive'))
+
+        doa_nav_cta = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Apply Online (DOA)')]"))
+        )
+        doa_nav_cta.click()
+        time.sleep(1)
+
+        # Check URL hash and title
+        doa_title = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//h1[contains(., 'Direct Online Admission')]"))
+        )
+        assert doa_title
+        print("   ✔ Navigated to standalone DOA page:", doa_title.text)
+
+        # Select branch & sharing
+        branch_options = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.CLASS_NAME, "doa-branch-option"))
+        )
+        branch_options[0].click()
+        time.sleep(0.5)
+
+        sharing_cards = WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.CLASS_NAME, "doa-sharing-card"))
+        )
+        sharing_cards[0].click()
+        time.sleep(0.5)
+
+        # Fill applicant details & Aadhaar
+        test_email = f"doa_suite_{int(time.time())}@example.com"
+        driver.find_element(By.NAME, "name").send_keys("Kiran Rao")
+        driver.find_element(By.NAME, "email").send_keys(test_email)
+        driver.find_element(By.NAME, "phone").send_keys("9123456789")
+        aadhaar_input = driver.find_element(By.ID, "doa-aadhaar")
+        aadhaar_input.send_keys("987654321098")
+        time.sleep(0.5)
+
+        verified_chip = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.XPATH, "//*[contains(., 'Aadhaar Verified')]"))
+        )
+        assert verified_chip
+        print("   ✔ Formatted 12-digit Aadhaar input and verified badge verified.")
+
+        # Submit DOA application
+        submit_btn = driver.find_element(By.CSS_SELECTOR, "button.doa-submit-btn")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_btn)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", submit_btn)
+
+        success_title = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//h2[contains(., 'Admission Application Submitted!')]"))
+        )
+        assert success_title
+        print("   ✔ DOA Application submitted successfully.")
+
+        key_element = driver.find_element(By.CLASS_NAME, "doa-key-badge")
+        tracking_key = key_element.text.strip()
+        print(f"   ✔ Generated Private Tracking Key: {tracking_key}")
+
+        # Test live status tracking
+        track_live_btn = driver.find_element(By.XPATH, "//button[contains(., 'Track Status Live')]")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", track_live_btn)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", track_live_btn)
+        time.sleep(0.5)
+
+        check_btn = driver.find_element(By.XPATH, "//button[contains(., 'Check Admission Status')]")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", check_btn)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", check_btn)
+        time.sleep(1)
+
+        status_result = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//*[contains(., 'Admission Request #')]"))
+        )
+        assert status_result
+        print(f"   ✔ Tracking lookup verified.")
+
+        # Back to Home
+        back_btn = driver.find_element(By.XPATH, "//button[contains(., 'Back to Home')]")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", back_btn)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", back_btn)
+        time.sleep(1)
+        print("   ✔ Successfully returned to homepage from DOA page.")
+
+        print("\n==================================================")
+        print("ALL 9 END-TO-END WORKFLOWS PASSED WITH 100% SUCCESS!")
         print("==================================================")
 
     finally:

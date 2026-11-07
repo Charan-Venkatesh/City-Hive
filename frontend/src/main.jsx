@@ -7,6 +7,7 @@ import './features.css';
 import './design.css';
 import {useDialogFocus, Notifications, AdmissionHistory, DeploymentPanel, Discounts} from './PortalExtras';
 import PublicSite from './PublicSite';
+import AdmissionPage from './AdmissionPage';
 import BranchInsights from './BranchInsights';
 import RoomsManager from './RoomsManager';
 import MailTools from './MailTools';
@@ -39,8 +40,35 @@ const dateLabel=v=>new Date(v).toLocaleDateString('en-IN',{day:'numeric',month:'
 const initial={residents:[],rooms:[],branches:[],branchAdmins:[],admissions:[],stayRequests:[],availableRooms:[],invoices:[],payments:[],complaints:[],gatePasses:[],feePlans:[],complaintAssignees:[],settlements:[],emails:[],dashboard:{}};
 function App(){
  useAccessibleValidation();
+ const [route, setRoute] = useState(() => {
+  if (typeof window !== 'undefined') {
+   const h = window.location.hash;
+   if (h === '#doa' || h === '#admission' || h.startsWith('#doa-branch-')) return 'doa';
+  }
+  return 'home';
+ });
+ const [admissionBranchId, setAdmissionBranchId] = useState(() => {
+  if (typeof window !== 'undefined' && window.location.hash.startsWith('#doa-branch-')) {
+   return window.location.hash.replace('#doa-branch-', '');
+  }
+  return null;
+ });
  useEffect(()=>{
-  const onHash=()=>{if(typeof window!=='undefined'&&(window.location.hash==='#login'||window.location.pathname==='/login'))setShowLogin(true)};
+  const onHash=()=>{
+   if(typeof window!=='undefined'){
+    const h = window.location.hash;
+    if(h==='#login'||window.location.pathname==='/login') {
+     setShowLogin(true);
+    } else if(h==='#doa'||h==='#admission') {
+     setRoute('doa');
+    } else if(h.startsWith('#doa-branch-')) {
+     setAdmissionBranchId(h.replace('#doa-branch-', ''));
+     setRoute('doa');
+    } else if(h===''||h==='#home'||h==='#branches'||h==='#rooms'||h==='#gallery'||h==='#amenities'||h==='#improve'||h==='#contact'||h==='#track-enquiry') {
+     setRoute('home');
+    }
+   }
+  };
   window.addEventListener('hashchange',onHash);
   return ()=>window.removeEventListener('hashchange',onHash);
  },[]);
@@ -109,7 +137,12 @@ function App(){
  function allocateModal(r){setModal({kind:'allocate',resident:r})}
  function payModal(i){setModal({kind:'payment',invoice:i,key:crypto.randomUUID()})}
  const alert=<>{error&&<div role="alert" className="alert error">{error}<button aria-label="Dismiss error" onClick={()=>setError('')}><X size={16}/></button></div>}{notice&&<div role="status" className="alert success toast"><Check size={17}/>{notice}<button aria-label="Dismiss notification" onClick={()=>setNotice('')}><X size={16}/></button></div>}</>;
- if(!token&&!showLogin)return <PublicSite onLogin={()=>setShowLogin(true)}/>;
+ if(!token&&!showLogin){
+  if(route==='doa'){
+   return <AdmissionPage initialBranchId={admissionBranchId} onBack={()=>{setRoute('home');window.location.hash='';}} onLogin={()=>setShowLogin(true)}/>;
+  }
+  return <PublicSite onLogin={()=>setShowLogin(true)} onApplyAdmission={(bId)=>{if(bId)setAdmissionBranchId(bId);setRoute('doa');window.location.hash=bId?`doa-branch-${bId}`:'doa';}}/>;
+ }
  if(!token)return <div className="login"><section className="login-story"><div className="brand"><img className="cityhive-mark" src="/cityhive-mark.png?v=3" alt=""/> <span className="brand-name">Cityhive Luxury PG's and Co-space</span><span className="brand-subtitle">PG + CO-SPACE</span></div><div><span className="eyebrow">CITYHIVE OPERATIONS</span><h1>Thoughtful spaces.<br/>Clear daily operations.</h1><p>Manage branches, rooms, residents, stays and payments in one workspace.</p><div className="login-shapes"><div>Residents<span>Admissions & stays</span></div><div>Operations<span>Branches & rooms</span></div><div>Payments<span>Invoices & receipts</span></div></div></div><small>PG + CO-SPACE MANAGEMENT</small></section><section className="login-form"><button className="text-btn" onClick={()=>setShowLogin(false)}>← Back to branches</button><div className="pill">SECURE WORKSPACE</div><h2>Welcome home.</h2><p>Sign in to manage a branch or view your stay.</p>{localMode&&<div className="info-strip">Local workspace: test verification codes arrive in the <a href="http://127.0.0.1:8025/" target="_blank" rel="noopener noreferrer">local email inbox</a>. No real phone messages are sent.</div>}{alert}{authChallenge?<><div className="otp-intro"><div className="pill">{authChallenge.channel==='sms'?'SMS':'WHATSAPP'} VERIFICATION</div><h2>{localMode?"Check the local inbox.":"Check your phone."}</h2><p>{localMode?"Enter the six-digit local test code for ":"Enter the six-digit code sent to "}<strong>{authChallenge.masked_phone}</strong>. It expires in {Math.max(0,Math.ceil((authChallenge.expiresAt-authClock)/1000))} seconds.</p></div><form onSubmit={submit(async v=>{setBusy(true);setError('');try{const res=await post('/auth/otp/verify',{challenge_id:authChallenge.challenge_id,code:v.code});sessionStorage.setItem('staywell-token',res.access_token);setAuthChallenge(null);setToken(res.access_token)}catch(e){setError(e.message)}finally{setBusy(false)}})}><Field label="Six-digit verification code" name="code" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" required autoFocus/><button className="primary wide" disabled={busy}>{busy?'Verifying…':'Verify and sign in'}<ArrowUpRight size={18}/></button></form><button className="text-btn otp-resend" disabled={busy||authChallenge.resendAt>authClock||authChallenge.expiresAt<=authClock} onClick={async()=>{setBusy(true);setError('');try{const res=await post('/auth/otp/resend',{challenge_id:authChallenge.challenge_id});setAuthChallenge({...res,expiresAt:Date.now()+res.expires_in_seconds*1000,resendAt:Date.now()+res.resend_after_seconds*1000})}catch(e){setError(e.message)}finally{setBusy(false)}}}>{authChallenge.resendAt>authClock?`Resend code in ${Math.ceil((authChallenge.resendAt-authClock)/1000)}s`:'Resend code'}<ArrowUpRight size={14}/></button><button className="text-btn otp-back" disabled={busy} onClick={()=>{setAuthChallenge(null);setError('')}}>← Return to sign in</button><p className="muted small">If this number is out of date, contact management to update your registered contact. Support cannot bypass verification.</p></>:<><form onSubmit={submit(async v=>{setBusy(true);setError('');try{const res=await post('/auth/login',v);if(res.access_token){sessionStorage.setItem('staywell-token',res.access_token);setToken(res.access_token);return}setAuthChallenge({...res,expiresAt:Date.now()+res.expires_in_seconds*1000,resendAt:Date.now()+res.resend_after_seconds*1000})}catch(e){setError(e.message)}finally{setBusy(false)}})}><Field label="Email or username" name="email" type="text" required autoComplete="username" placeholder="you@example.com"/><Field label="Password" name="password" type="password" required autoComplete="current-password"/><button className="primary wide" disabled={busy}>{busy?'Checking…':'Continue securely'}<ArrowUpRight size={18}/></button></form><p className="muted small">Sign in with the email or username and password provided by management.</p></>}</section></div>;
  if(!user)return <div className="loading">{alert}Loading your workspace…</div>;
  if(user.must_change_password)return <div className="password-wrap"><section className="card"><ShieldCheck size={34}/><h2>Make your account yours</h2><p>Change the temporary password before accessing your resident portal.</p>{alert}<form onSubmit={submit(v=>act(async()=>{await post('/auth/password',v);const who=await api('/auth/me');setUser(who);await refresh(who)},'Password changed'))}><Field label="Temporary password" name="current_password" type="password" required autoComplete="current-password"/><Field label="New password (10+ characters)" name="new_password" type="password" minLength={10} required autoComplete="new-password"/><button className="primary" disabled={busy}>Save password</button></form><button className="text-btn" onClick={logout}>Sign out</button></section></div>;

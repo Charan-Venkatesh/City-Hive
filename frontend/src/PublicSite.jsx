@@ -164,7 +164,7 @@ function Heading({eyebrow, title, children}) {
  );
 }
 
-export default function PublicSite({onLogin}) {
+export default function PublicSite({onLogin, onApplyAdmission}) {
  const [branches, setBranches] = useState([]);
  const [inventory, setInventory] = useState({});
  const [selected, setSelected] = useState('');
@@ -334,12 +334,23 @@ export default function PublicSite({onLogin}) {
      <a href="#amenities">Amenities</a>
      <a href="#improve">How to improve</a>
      <a href="#contact">Contact</a>
-     <a href="#track-enquiry">Track enquiry</a>
+     <a href="#doa" onClick={e => { e.preventDefault(); setMenu(false); if (onApplyAdmission) onApplyAdmission(); else window.location.hash = 'doa'; }}>DOA Portal</a>
      <button className="ch-nav-portal-btn" onClick={()=>{setMenu(false);onLogin();}} title="Staff and Resident Workspace Login">
       <Lock size={13} />
       <span>Portal</span>
      </button>
-     <a className="ch-nav-cta" href="#enquire" onClick={()=>setMenu(false)}>Check availability <ArrowRight size={15}/></a>
+     <a
+      className="ch-nav-cta"
+      href="#doa"
+      onClick={e => {
+        e.preventDefault();
+        setMenu(false);
+        if (onApplyAdmission) onApplyAdmission();
+        else window.location.hash = 'doa';
+      }}
+     >
+      Apply Online (DOA) <ArrowRight size={15}/>
+     </a>
     </nav>
    </header>
 
@@ -354,8 +365,18 @@ export default function PublicSite({onLogin}) {
        nutritious home-style meals, dedicated co-working areas and seamless community living.
       </p>
       <div className="ch-actions">
-       <a className="ch-button" href="#rooms">Explore rooms <ArrowRight size={18} /></a>
-       <a className="ch-link" href="#gallery">View photo gallery <ArrowUpRight size={18} /></a>
+       <a
+        className="ch-button"
+        href="#doa"
+        onClick={e => {
+          e.preventDefault();
+          if (onApplyAdmission) onApplyAdmission();
+          else window.location.hash = 'doa';
+        }}
+       >
+        Direct Online Admission (DOA) <ArrowRight size={18} />
+       </a>
+       <a className="ch-link" href="#rooms">Explore rooms &amp; pricing <ArrowUpRight size={18} /></a>
       </div>
       <div className="ch-hero-features">
        <span><CheckCircle2 size={15} /> 300 Mbps Mesh Wi-Fi</span>
@@ -429,8 +450,16 @@ export default function PublicSite({onLogin}) {
             <a className="ch-button outline" href={`#branch-${b.id}`} onClick={() => chooseBranch(b.id)}>
              Explore branch <ArrowRight size={16} />
             </a>
-            <a className="ch-button" href="#enquire" onClick={() => chooseBranch(b.id)}>
-             Enquire now <ChevronRight size={16} />
+            <a
+             className="ch-button"
+             href={`#doa-branch-${b.id}`}
+             onClick={e => {
+               e.preventDefault();
+               if (onApplyAdmission) onApplyAdmission(b.id);
+               else window.location.hash = `doa-branch-${b.id}`;
+             }}
+            >
+             Apply Online (DOA) <ChevronRight size={16} />
             </a>
            </div>
           </div>
@@ -665,6 +694,24 @@ export default function PublicSite({onLogin}) {
       <span className="ch-eyebrow">DIRECT ADMISSION ENQUIRY</span>
       <h3>Let’s find your place.</h3>
       <p>Fill out the form below. Submitting does not require payment and does not confirm a booking.</p>
+      <div style={{background: 'linear-gradient(135deg, #0f172a 0%, #064e3b 100%)', color: '#fff', padding: '16px 20px', borderRadius: 12, marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12}}>
+       <div>
+        <strong style={{display: 'block', fontSize: '0.98rem', color: '#6ee7b7'}}>Prefer the full admission portal?</strong>
+        <span style={{fontSize: '0.85rem', color: '#cbd5e1'}}>Complete step-by-step admission with Aadhaar verification and live tracking.</span>
+       </div>
+       <a
+        className="ch-button"
+        href="#doa"
+        onClick={e => {
+          e.preventDefault();
+          if (onApplyAdmission) onApplyAdmission(selected);
+          else window.location.hash = 'doa';
+        }}
+        style={{background: '#059669', color: '#fff', border: 'none', padding: '8px 16px', fontSize: '0.88rem'}}
+       >
+        Open Dedicated DOA Page <ArrowRight size={15}/>
+       </a>
+      </div>
       {loading ? (
        <p role="status">Loading available locations…</p>
       ) : loadError ? (
